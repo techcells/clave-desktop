@@ -2,13 +2,24 @@
 export const BUILT_IN_EXCLUSIONS = [
   "loginwindow", "ScreenSaverEngine", "LockApp", "LogonUI",
   "Dock", "SystemUIServer", "Control Center", "Notification Center", "Spotlight", "WindowManager",
+  // Windows, as its reader names them (each program's own description, measured on Windows 11): the
+  // sign-in screen, the Start menu, Search, the notification and quick-settings flyouts, the touch
+  // keyboard and emoji panel, the administrator prompt and the Windows credential prompt. The
+  // desktop, taskbar and task switcher never get this far: the reader does not report them at all.
+  "Windows Logon User Interface Host", "Windows Start Experience Host", "SearchHost",
+  "Windows Shell Experience Host", "ShellHost", "TextInputHost",
+  "Consent UI for administrative applications", "Credential Manager UI Host",
   "Clave Agent"
 ];
 
 /** Seeded on first run. The user can edit this list. Slack, Teams and Discord are work tools and are read. */
 export const DEFAULT_EXCLUSIONS = [
   "1Password::", "Bitwarden::", "LastPass::", "Dashlane::", "KeePassXC::", "Keychain Access::", "Passwords::",
+  // Windows: classic KeePass, and Windows' own password store (opened in a Control Panel window).
+  "KeePass::", "::Credential Manager",
   "Telegram::", "WhatsApp::", "Messages::", "Signal::",
+  // Windows: Phone Link shows the phone's text messages, as Messages does on macOS.
+  "Phone Link::",
   "::online banking", "::internet banking", "::bank account", "::net banking"
 ];
 

@@ -27,7 +27,7 @@ use ::windows::Win32::System::Threading::{
 };
 use ::windows::Win32::UI::HiDpi::GetDpiForWindow;
 use ::windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, GWL_EXSTYLE, GetForegroundWindow, GetWindowLongW, GetWindowRect, GetWindowTextLengthW,
+    EnumChildWindows, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowRect, GetWindowTextLengthW,
     GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, WS_EX_TOOLWINDOW,
 };
 use ::windows::core::{BOOL, PCWSTR, PWSTR, w};
@@ -45,6 +45,35 @@ const LOCK_SCREEN_EXES: [&str; 2] = ["lockapp.exe", "logonui.exe"];
 /// The frame that hosts every UWP app window. The window the user sees belongs to a child process,
 /// so the child's program is the one reported.
 const UWP_FRAME_HOST: &str = "applicationframehost.exe";
+
+/// Window classes of the shell's own surfaces, which are not anybody's work: the desktop behind every
+/// window (`Progman`, `WorkerW`), the taskbars, and the task switchers of Windows 10 and 11. They are
+/// the Windows counterpart of what macOS's window list leaves out as desktop elements and non-zero
+/// layers, so they are left out the same way — as "no ordinary window in front" — rather than being
+/// named and handed to the app to judge.
+const SHELL_SURFACE_CLASSES: [&str; 8] = [
+    "Progman",
+    "WorkerW",
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "XamlExplorerHostIslandWindow",
+    "MultitaskingViewFrame",
+    "TaskSwitcherWnd",
+    "ForegroundStaging",
+];
+
+pub fn is_shell_surface(class: &str) -> bool {
+    SHELL_SURFACE_CLASSES.contains(&class)
+}
+
+/// The name a program is known by: its version resource's description, unless that is missing, blank
+/// or merely its own file name ("LockApp.exe"), in which case the file name without `.exe`.
+pub fn display_name(description: Option<&str>, exe: &str, stem: &str) -> String {
+    match description.map(str::trim) {
+        Some(d) if !d.is_empty() && !d.eq_ignore_ascii_case(exe) => d.to_owned(),
+        _ => stem.to_owned(),
+    }
+}
 
 /// What the helper knows about a running program, looked up once per executable path: reading a
 /// version resource is file I/O, and the foreground window is asked about every second.
@@ -128,6 +157,11 @@ fn ordinary(hwnd: HWND) -> bool {
             return false;
         }
         if (GetWindowLongW(hwnd, GWL_EXSTYLE) as u32) & WS_EX_TOOLWINDOW.0 != 0 {
+            return false;
+        }
+        let mut class = [0u16; 64];
+        let length = GetClassNameW(hwnd, &mut class);
+        if length > 0 && is_shell_surface(&String::from_utf16_lossy(&class[..length as usize])) {
             return false;
         }
         let mut cloaked = 0u32;
@@ -219,7 +253,7 @@ fn program_of_pid(pid: u32) -> Option<Program> {
     let file = Path::new(&path);
     let exe = file.file_name()?.to_string_lossy().to_lowercase();
     let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| exe.clone());
-    let name = file_description(&path).filter(|d| !d.trim().is_empty()).map(|d| d.trim().to_owned()).unwrap_or(stem);
+    let name = display_name(file_description(&path).as_deref(), &exe, &stem);
     let program = Program { name, exe };
     programs.insert(path, program.clone());
     Some(program)
@@ -274,5 +308,35 @@ fn file_description(path: &str) -> Option<String> {
         let text = std::slice::from_raw_parts(value as *const u16, chars as usize);
         let end = text.iter().position(|&c| c == 0).unwrap_or(text.len());
         Some(String::from_utf16_lossy(&text[..end]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_program_is_named_by_its_description() {
+        assert_eq!(display_name(Some("Microsoft Edge"), "msedge.exe", "msedge"), "Microsoft Edge");
+        assert_eq!(display_name(Some("  Windows Explorer "), "explorer.exe", "explorer"), "Windows Explorer");
+    }
+
+    /// Measured on Windows 11: LockApp's description is its own file name, and SearchHost has none.
+    /// Both must come out as the names the exclusion lists are written in.
+    #[test]
+    fn a_description_that_is_missing_blank_or_the_file_name_gives_way_to_the_stem() {
+        assert_eq!(display_name(Some("LockApp.exe"), "lockapp.exe", "LockApp"), "LockApp");
+        assert_eq!(display_name(Some("   "), "searchhost.exe", "SearchHost"), "SearchHost");
+        assert_eq!(display_name(None, "textinputhost.exe", "TextInputHost"), "TextInputHost");
+    }
+
+    #[test]
+    fn the_desktop_taskbars_and_task_switchers_are_not_ordinary_windows() {
+        for class in ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "XamlExplorerHostIslandWindow"] {
+            assert!(is_shell_surface(class), "{class}");
+        }
+        // File Explorer's own windows are work, as Finder's are on macOS.
+        assert!(!is_shell_surface("CabinetWClass"));
+        assert!(!is_shell_surface("Chrome_WidgetWin_1"));
     }
 }

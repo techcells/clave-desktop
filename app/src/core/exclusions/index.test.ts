@@ -64,6 +64,26 @@ describe("before capture", () => {
     }
   });
 
+  // The names are what the Windows reader reports: each program's own description, measured on Windows 11.
+  it("denies Windows' own surfaces and prompts, which the user cannot re-enable", () => {
+    const x = createExclusions({exclusions: [], excludedSites: []});
+    for (const app of [
+      "LockApp", "Windows Logon User Interface Host", "Windows Start Experience Host", "SearchHost",
+      "Windows Shell Experience Host", "ShellHost", "TextInputHost",
+      "Consent UI for administrative applications", "Credential Manager UI Host"
+    ]) {
+      expect(x.before({app, title: "Main"}), app).toBe("excludedApp");
+    }
+    // File Explorer, Settings and Task Manager are ordinary work windows, as Finder is on macOS.
+    for (const app of ["Windows Explorer", "Settings", "Task Manager"]) expect(x.before({app, title: "Main"}), app).toBeNull();
+  });
+
+  it("excludes the Windows messengers and password stores by default", () => {
+    const x = defaults();
+    for (const app of ["Telegram Desktop", "KeePass", "Phone Link"]) expect(x.before({app, title: "Main"}), app).toBe("excludedApp");
+    expect(x.before({app: "Windows Explorer", title: "Credential Manager"})).toBe("excludedTitle");
+  });
+
   it("reads work chat by default", () => {
     const x = defaults();
     for (const app of ["Slack", "Microsoft Teams", "Discord"]) expect(x.before({app, title: "#general"})).toBeNull();
