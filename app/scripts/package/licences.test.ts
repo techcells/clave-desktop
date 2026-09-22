@@ -6,7 +6,8 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as licences from "./licences.mjs";
 
-const {ALLOWED, licenceField, chosenLicence, packageRoots, licenceFilesIn, cleanText, checkEntries, modelSection, render, pickLicenceFile, normaliseSource} = licences as {
+const {ALLOWED, licenceField, chosenLicence, packageRoots, licenceFilesIn, cleanText, checkEntries, modelSection, render, pickLicenceFile, normaliseSource, linkedCrates} = licences as {
+  linkedCrates: (graph: unknown) => Array<{name: string; version: string; licence: string | null}>;
   pickLicenceFile: (files: string[], chosen: string | null) => string | null;
   normaliseSource: (raw: unknown) => string | undefined;
   ALLOWED: string[];
@@ -19,6 +20,42 @@ const {ALLOWED, licenceField, chosenLicence, packageRoots, licenceFilesIn, clean
   modelSection: (model: unknown, flavour: string) => {text?: string; error?: string};
   render: (sections: Record<string, unknown>) => {text?: string; error?: string; detail?: string};
 };
+
+describe("linkedCrates: the crates inside the helper binary", () => {
+  // The shape of `cargo metadata --format-version 1`, cut down to what the walk reads. It mirrors the
+  // Windows helper's real graph: `windows` pulls in a proc macro, which pulls in `syn` and `unicode-ident`.
+  const pkg = (name: string, licence: string, kind = "lib") => ({id: `${name}-id`, name, version: "1.0.0", license: licence, targets: [{kind: [kind]}]});
+  const edge = (name: string, kind: string | null = null) => ({pkg: `${name}-id`, dep_kinds: [{kind, target: null}]});
+  const graph = {
+    packages: [pkg("clave-reader", "UNLICENSED", "bin"), pkg("serde_json", "MIT OR Apache-2.0"), pkg("windows", "MIT OR Apache-2.0"),
+      pkg("windows-implement", "MIT OR Apache-2.0", "proc-macro"), pkg("syn", "MIT OR Apache-2.0"), pkg("unicode-ident", "(MIT OR Apache-2.0) AND Unicode-3.0"),
+      pkg("cc", "MIT OR Apache-2.0"), pkg("shared", "MIT")],
+    resolve: {
+      root: "clave-reader-id",
+      nodes: [
+        {id: "clave-reader-id", deps: [edge("serde_json"), edge("windows"), edge("cc", "build")]},
+        {id: "windows-id", deps: [edge("windows-implement"), edge("shared")]},
+        {id: "windows-implement-id", deps: [edge("syn"), edge("shared")]},
+        {id: "syn-id", deps: [edge("unicode-ident")]},
+        {id: "serde_json-id", deps: [edge("shared")]},
+        {id: "cc-id", deps: []}, {id: "shared-id", deps: []}, {id: "unicode-ident-id", deps: []}
+      ]
+    }
+  };
+
+  it("lists what is linked, and not the root, a proc macro, what only it needs, or a build dependency", () => {
+    expect(linkedCrates(graph).map((c) => c.name).sort()).toEqual(["serde_json", "shared", "windows"]);
+  });
+
+  it("keeps a crate that a proc macro and a linked crate both use", () => {
+    expect(linkedCrates(graph).map((c) => c.name)).toContain("shared");
+  });
+
+  it("follows an edge that states no kinds, so an older cargo lists more rather than less", () => {
+    const old = {...graph, resolve: {...graph.resolve, nodes: graph.resolve.nodes.map((n) => ({...n, deps: n.deps.map((d) => ({pkg: d.pkg}))}))}};
+    expect(linkedCrates(old).map((c) => c.name).sort()).toEqual(["cc", "serde_json", "shared", "windows"]);
+  });
+});
 
 describe("licenceField: a package.json's licence as one string", () => {
   it("reads the three spellings and trims", () => {
@@ -196,7 +233,15 @@ describe("a real staged licence file, when one exists", () => {
   it.each(files.length > 0 ? files : [])("%s names Electron, node-llama-cpp, the crates and the model, and is clean", (path) => {
     const text = readFileSync(path, "utf8");
     expect(cleanText(text)).not.toBeNull();
-    for (const needle of ["Electron 44.", "node-llama-cpp 3.21.1", "objc2-vision", "objc2-screen-capture-kit", "llama.cpp", "Qwen3.5-4B", "LICENSES.chromium.html", "Appendix: standard licence texts",
+    // The helper's crates are the packaged system's: the staging manifest beside the file says which
+    // (none means a run from before Windows, i.e. macOS).
+    const manifestPath = join(path, "..", "..", "..", "manifest.json");
+    const platform = (existsSync(manifestPath) ? (JSON.parse(readFileSync(manifestPath, "utf8")) as {platform?: string}).platform : undefined) ?? "darwin";
+    const crates = platform === "win32" ? ["\nwindows 0.62", "\nwindows-core 0.62"] : ["objc2-vision", "objc2-screen-capture-kit"];
+    for (const crate of crates) expect(text, crate).toContain(crate);
+    // Compile-time-only crates run inside the compiler and are not in the binary (`linkedCrates`).
+    if (platform === "win32") for (const macro of ["\nwindows-implement ", "\nsyn ", "\nunicode-ident "]) expect(text, macro).not.toContain(macro);
+    for (const needle of ["Electron 44.", "node-llama-cpp 3.21.1", "llama.cpp", "Qwen3.5-4B", "LICENSES.chromium.html", "Appendix: standard licence texts",
       "react 19.2.0 (compiled into the application code)", "react-dom 19.2.0 (compiled", "scheduler 0.", "zod 4.6.5 (compiled"]) {
       expect(text, needle).toContain(needle);
     }

@@ -2,17 +2,18 @@
 // import (its program half is gated on argv[1]); nothing here touches the filesystem except the
 // last block, which READS a manifest a real staging run left behind, if one exists, and skips otherwise.
 import {existsSync, readdirSync, readFileSync} from "node:fs";
-import {join} from "node:path";
+import {join, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as stageScript from "./stage.mjs";
 
-const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest, resolveOut, requestedFlavour, installedIds} = stageScript as {
-  shipList: (files: string[], flavour: string) => {ship?: string[]; helper?: string; error?: {code: string; path: string}};
+const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest, resolveOut, requestedFlavour, installedIds, pnpmInvocation} = stageScript as {
+  shipList: (files: string[], flavour: string, platform?: string) => {ship?: string[]; helper?: string; error?: {code: string; path: string}};
   runtimePackageJson: (a: {flavour: string; version: string; nodeLlamaCppVersion: string}) => Record<string, unknown>;
   lockHas: (lock: string, id: string) => boolean;
-  pruneDecision: (rel: string, options?: {dropLlamaSource?: boolean}) => "keep" | "drop";
-  forbidden: (rel: string) => string | null;
+  pruneDecision: (rel: string, options?: {dropLlamaSource?: boolean; platform?: string}) => "keep" | "drop";
+  forbidden: (rel: string, platform?: string) => string | null;
+  pnpmInvocation: (path: string, o: {nodePath: string; exists: (p: string) => boolean; join?: (...p: string[]) => string; dirname?: (p: string) => string}) => {command: string; args: string[]} | null;
   manifest: (entries: Array<{path: string; bytes: number; sha256: string}>, info: Record<string, string>) => {fileCount: number; totalBytes: number; files: Array<{path: string}>};
   resolveOut: (argv: string[], home: string, appDir: string) => {dir?: string; error?: string};
   requestedFlavour: (argv: string[]) => {flavour?: string | null; error?: string};
@@ -145,6 +146,81 @@ describe("pruneDecision: what of the offline install is thrown away", () => {
   });
 });
 
+describe("Windows: the same rules, for what a win32 staging run ships", () => {
+  const WIN_COMPLETE = COMPLETE.map((f) => (f === "native/clave-reader" ? "native/clave-reader.exe" : f));
+
+  it("takes the .exe helper out of dist and refuses the macOS name there", () => {
+    const r = shipList(WIN_COMPLETE, "internal", "win32");
+    expect(r.error).toBeUndefined();
+    expect(r.helper).toBe("native/clave-reader.exe");
+    expect(shipList(COMPLETE, "internal", "win32").error).toEqual({code: "UNEXPECTED_DIST_FILE", path: "native/clave-reader"});
+    // And the other way round: a macOS run still refuses a Windows helper.
+    expect(shipList(WIN_COMPLETE, "internal").error).toEqual({code: "UNEXPECTED_DIST_FILE", path: "native/clave-reader.exe"});
+  });
+
+  it("refuses a system nothing here packages", () => {
+    expect(shipList(COMPLETE, "internal", "linux").error).toEqual({code: "UNSUPPORTED_PLATFORM", path: "linux"});
+  });
+
+  it("keeps the CPU and Vulkan builds and reflink's Windows binary, and drops CUDA, arm64 and every Mac package", () => {
+    const win = {platform: "win32"};
+    for (const rel of ["@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node", "@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll",
+      "@reflink/reflink-win32-x64-msvc/reflink.win32-x64-msvc.node", "@reflink/reflink/index.js", "@node-llama-cpp", "@reflink"]) {
+      expect(pruneDecision(rel, win), rel).toBe("keep");
+    }
+    for (const rel of ["@node-llama-cpp/win-x64-cuda", "@node-llama-cpp/win-x64-cuda-ext", "@node-llama-cpp/win-arm64", "@node-llama-cpp/mac-arm64-metal",
+      "@reflink/reflink-darwin-arm64", "@reflink/reflink-win32-arm64-msvc"]) {
+      expect(pruneDecision(rel, win), rel).toBe("drop");
+    }
+  });
+
+  it("drops the linker's leftovers beside the DLLs, and refuses them if one slipped through", () => {
+    expect(pruneDecision("@node-llama-cpp/win-x64/bins/win-x64/llama-addon.lib", {platform: "win32"})).toBe("drop");
+    expect(pruneDecision("@node-llama-cpp/win-x64/bins/win-x64/llama-addon.pdb", {platform: "win32"})).toBe("drop");
+    expect(forbidden("node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.lib", "win32")).toBe("FORBIDDEN_FILE");
+  });
+
+  it("allows native binaries in the Windows homes only, and a Mac binary nowhere", () => {
+    for (const rel of ["node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama.v0.4.0.dll", "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll",
+      "node_modules/@reflink/reflink-win32-x64-msvc/reflink.win32-x64-msvc.node"]) {
+      expect(forbidden(rel, "win32"), rel).toBeNull();
+    }
+    expect(forbidden("node_modules/node-llama-cpp/dist/stray.dll", "win32")).toBe("BINARY_OUTSIDE_ITS_HOME");
+    expect(forbidden("node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/llama-addon.node", "win32")).not.toBeNull();
+    expect(forbidden("dist/native/clave-reader.exe", "win32")).toBe("HELPER_INSIDE_ASAR");
+  });
+
+  it("leaves macOS exactly as it was when no platform is named", () => {
+    expect(pruneDecision("@node-llama-cpp/win-x64")).toBe("drop");
+    expect(forbidden("node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama.v0.4.0.dll")).not.toBeNull();
+  });
+});
+
+describe("pnpmInvocation: running pnpm without a shell", () => {
+  const exists = (paths: string[]) => (p: string) => paths.includes(p);
+  const opts = (paths: string[]) => ({nodePath: "NODE", exists: exists(paths), join: (...p: string[]) => p.join("/"), dirname: (p: string) => p.slice(0, p.lastIndexOf("/"))});
+
+  it("runs a real executable as it is", () => {
+    expect(pnpmInvocation("/home/u/Library/pnpm/bin/pnpm", opts(["/home/u/Library/pnpm/bin/pnpm"]))).toEqual({command: "/home/u/Library/pnpm/bin/pnpm", args: []});
+  });
+
+  it("replaces a global npm .cmd shim by the JavaScript entry beside it, run with Node", () => {
+    expect(pnpmInvocation("C:/Users/u/AppData/Roaming/npm/pnpm.cmd", opts(["C:/Users/u/AppData/Roaming/npm/node_modules/pnpm/bin/pnpm.cjs"])))
+      .toEqual({command: "NODE", args: ["C:/Users/u/AppData/Roaming/npm/node_modules/pnpm/bin/pnpm.cjs"]});
+  });
+
+  it("finds the entry of a .bin shim one folder up", () => {
+    expect(pnpmInvocation("D:/tools/node_modules/.bin/pnpm.CMD", opts(["D:/tools/node_modules/.bin/../pnpm/bin/pnpm.cjs"])))
+      .toEqual({command: "NODE", args: ["D:/tools/node_modules/.bin/../pnpm/bin/pnpm.cjs"]});
+  });
+
+  it("runs a named .cjs entry with Node, and reports what cannot be run", () => {
+    expect(pnpmInvocation("D:/pnpm/bin/pnpm.cjs", opts(["D:/pnpm/bin/pnpm.cjs"]))).toEqual({command: "NODE", args: ["D:/pnpm/bin/pnpm.cjs"]});
+    expect(pnpmInvocation("C:/nowhere/pnpm.cmd", opts([]))).toBeNull();
+    expect(pnpmInvocation("/nowhere/pnpm", opts([]))).toBeNull();
+  });
+});
+
 describe("forbidden: the must-not-ship rule over the asar root", () => {
   it("allows exactly package.json, dist/ and node_modules/ content", () => {
     for (const rel of ["package.json", "dist/main.cjs", "dist/renderer/index.html", "dist/WHAT-LEAVES.md", "dist/THIRD-PARTY-LICENSES.txt",
@@ -207,9 +283,10 @@ describe("manifest, resolveOut, requestedFlavour, installedIds", () => {
   });
 
   it("resolveOut defaults to app/out, takes --out, refuses the two Applications folders and a missing path", () => {
-    expect(resolveOut(["node", "stage.mjs"], "/Users/nobody", "/repo/app")).toEqual({dir: "/repo/app/out"});
-    expect(resolveOut(["node", "stage.mjs", "--out", "/tmp/x"], "/Users/nobody", "/repo/app")).toEqual({dir: "/tmp/x"});
-    expect(resolveOut(["node", "stage.mjs", "--out", "~/scratch"], "/Users/nobody", "/repo/app")).toEqual({dir: "/Users/nobody/scratch"});
+    // Resolved, because that is what the function returns: the same strings on macOS, drive-rooted on Windows.
+    expect(resolveOut(["node", "stage.mjs"], "/Users/nobody", "/repo/app")).toEqual({dir: resolve("/repo/app/out")});
+    expect(resolveOut(["node", "stage.mjs", "--out", "/tmp/x"], "/Users/nobody", "/repo/app")).toEqual({dir: resolve("/tmp/x")});
+    expect(resolveOut(["node", "stage.mjs", "--out", "~/scratch"], "/Users/nobody", "/repo/app")).toEqual({dir: resolve("/Users/nobody/scratch")});
     expect(resolveOut(["node", "stage.mjs", "--out", "~/Applications"], "/Users/nobody", "/repo/app")).toEqual({error: "OUT_IS_APPLICATIONS"});
     expect(resolveOut(["node", "stage.mjs", "--out", "/Users/nobody/Applications/deep"], "/Users/nobody", "/repo/app")).toEqual({error: "OUT_IS_APPLICATIONS"});
     expect(resolveOut(["node", "stage.mjs", "--out", "/Applications"], "/Users/nobody", "/repo/app")).toEqual({error: "OUT_IS_APPLICATIONS"});
@@ -237,17 +314,22 @@ describe("a real staging run, when one exists", () => {
   const outDir = join(fileURLToPath(new URL("../..", import.meta.url)), "out");
   const manifests = existsSync(outDir) ? readdirSync(outDir).map((f) => join(outDir, f, "staging", "manifest.json")).filter((p) => existsSync(p)) : [];
   it.each(manifests.length > 0 ? manifests : [])("%s ships nothing forbidden and no map", (path) => {
-    const m = JSON.parse(readFileSync(path, "utf8")) as {files: Array<{path: string; bytes: number; sha256: string}>; flavour: string};
+    const m = JSON.parse(readFileSync(path, "utf8")) as {files: Array<{path: string; bytes: number; sha256: string}>; flavour: string; platform?: string};
+    // A manifest from before Windows carries no platform: it was a macOS run.
+    const platform = m.platform ?? "darwin";
     expect(m.files.length).toBeGreaterThan(100);
     for (const f of m.files) {
-      expect(forbidden(f.path), f.path).toBeNull();
+      expect(forbidden(f.path, platform), f.path).toBeNull();
       expect(f.sha256).toMatch(/^[0-9a-f]{64}$/);
     }
     const paths = m.files.map((f) => f.path);
     expect(paths).toContain("package.json");
     expect(paths).toContain("dist/main.cjs");
     expect(paths).toContain("dist/THIRD-PARTY-LICENSES.txt");
-    expect(paths).toContain("node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/llama-addon.node");
+    const addons = platform === "win32"
+      ? ["node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node", "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/llama-addon.node"]
+      : ["node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/llama-addon.node"];
+    for (const addon of addons) expect(paths).toContain(addon);
     if (m.flavour === "release") expect(paths).not.toContain("dist/standins-taxonomy.json");
   });
   it("records whether a run was checked", () => { expect(manifests.length >= 0).toBe(true); });

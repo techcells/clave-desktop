@@ -18,7 +18,7 @@ import {spawnSync} from "node:child_process";
 import {createHash} from "node:crypto";
 import {cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync} from "node:fs";
 import {homedir} from "node:os";
-import {dirname, join, posix, resolve} from "node:path";
+import {basename, dirname, join, posix, resolve, sep} from "node:path";
 import {fileURLToPath} from "node:url";
 import {generateLicences} from "./licences.mjs";
 import {walk} from "./walk.mjs";
@@ -33,8 +33,44 @@ export const DIST_STANDINS_ONLY = ["standins-taxonomy.json"];
 export const DIST_NEVER = ["reader-eval.cjs", "eval-gate.mjs"];
 /** dist/ files the staging step READS and never ships: the inlined packages' licence facts. Required. */
 export const DIST_STAGING_ONLY = ["bundled-packages.json"];
+/**
+ * What ships differs per system in four facts, and only these: the helper's file name, which of
+ * node-llama-cpp's and reflink's per-platform binary packages stay, the folders native binaries may
+ * live in, and the Rust target the helper's crates are listed for. Keyed by `process.platform`, since
+ * a staging run packages the system it runs on; every other rule in this file is shared.
+ *
+ * Windows keeps both of node-llama-cpp's x64 builds: `win-x64-vulkan` for any GPU with a Vulkan
+ * driver (Intel, AMD, NVIDIA), and plain `win-x64` as the CPU fallback node-llama-cpp picks where
+ * Vulkan will not load. CUDA is not shipped (owner decision, 2026-09-23): 300 MB and more for
+ * NVIDIA alone, which Vulkan already serves.
+ */
+export const TARGETS = {
+  darwin: {
+    helper: "clave-reader",
+    keep: {"@node-llama-cpp": ["mac-arm64-metal"], "@reflink": ["reflink-darwin-arm64"]},
+    binaryHomes: ["node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/", "node_modules/@reflink/reflink-darwin-arm64/"],
+    rustTarget: "aarch64-apple-darwin"
+  },
+  win32: {
+    helper: "clave-reader.exe",
+    keep: {"@node-llama-cpp": ["win-x64", "win-x64-vulkan"], "@reflink": ["reflink-win32-x64-msvc"]},
+    binaryHomes: [
+      "node_modules/@node-llama-cpp/win-x64/bins/win-x64/",
+      "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/",
+      "node_modules/@reflink/reflink-win32-x64-msvc/"
+    ],
+    rustTarget: "x86_64-pc-windows-msvc"
+  }
+};
+
+/** The target for a platform, or `null` for one nothing here packages. */
+export function targetFor(platform) {
+  return Object.hasOwn(TARGETS, platform) ? TARGETS[platform] : null;
+}
+
 /** The one file under dist/native that exists, and where it goes: beside the asar, not inside it. */
-export const HELPER_IN_DIST = "native/clave-reader";
+export const HELPER_IN_DIST = `native/${TARGETS.darwin.helper}`;
+const helperInDist = (platform) => `native/${(targetFor(platform) ?? TARGETS.darwin).helper}`;
 /** The renderer files that must be there for the window to load at all. */
 export const RENDERER_REQUIRED = ["renderer/index.html", "renderer/main.js", "renderer/main.css"];
 
@@ -44,8 +80,10 @@ export const RENDERER_REQUIRED = ["renderer/index.html", "renderer/main.js", "re
  * path}}`. Refusals: a source map (nothing here ships one), a file nobody listed (a new build
  * output must be decided about here before it can ship), and a required file that is missing.
  */
-export function shipList(distFiles, flavour) {
+export function shipList(distFiles, flavour, platform = "darwin") {
   if (!FLAVOURS.includes(flavour)) return {error: {code: "BAD_FLAVOUR", path: String(flavour)}};
+  if (targetFor(platform) === null) return {error: {code: "UNSUPPORTED_PLATFORM", path: String(platform)}};
+  const HELPER_IN_DIST = helperInDist(platform);
   const files = [...distFiles].map((f) => f.split("\\").join("/")).sort();
   const ship = [];
   const consumed = [];
@@ -93,17 +131,24 @@ export function lockHas(lockText, id) {
 }
 
 /**
- * The two macOS-arm64 binary packages that may ship; every sibling for another platform is dropped
- * even if the offline install left one behind.
+ * The binary packages that may ship, per scope, for a platform (`TARGETS[platform].keep`); every
+ * sibling for another platform is dropped even if the offline install left one behind.
  */
-const KEEP_PLATFORM = {"@node-llama-cpp": "mac-arm64-metal", "@reflink": "reflink-darwin-arm64"};
+const keepFor = (platform) => (targetFor(platform) ?? TARGETS.darwin).keep;
+
+/**
+ * Build leftovers a Windows binary package carries beside its DLLs: the import library a linker
+ * would use (`llama-addon.lib`), export files and debug symbols. Nothing loads them at run time.
+ */
+const BUILD_LEFTOVERS = [".lib", ".exp", ".pdb"];
 
 /**
  * For a path relative to node_modules/ (posix): `drop` or `keep`. Applied to directories too, so a
  * dropped folder goes as a whole. Dropped: every dot-entry (`.bin` symlinks, `.pnpm`, pnpm's own
  * state files, any dotfile a package shipped), TypeScript (an optional peer nothing loads), every
- * other-platform binary package, type declarations and source maps (never read at run time), and,
- * only when asked, node-llama-cpp's `llama/` source tree (kept until Task 5 measures the app without it).
+ * other-platform binary package, type declarations, source maps and build leftovers (never read at
+ * run time), and, only when asked, node-llama-cpp's `llama/` source tree (kept until Task 5 measures
+ * the app without it). `options.platform` is the system being packaged; macOS when not given.
  */
 export function pruneDecision(relPath, options = {}) {
   const parts = relPath.split("\\").join("/").split("/").filter((p) => p.length > 0);
@@ -111,34 +156,38 @@ export function pruneDecision(relPath, options = {}) {
   if (parts.some((p) => p.startsWith("."))) return "drop";
   if (parts[0] === "typescript") return "drop";
   const scope = parts[0];
+  const keep = keepFor(options.platform ?? "darwin");
   // `@reflink/reflink` is the JavaScript front of the binary packages and stays; its siblings are per platform.
   const jsFront = scope === "@reflink" && parts[1] === "reflink";
-  if (!jsFront && scope in KEEP_PLATFORM && parts.length >= 2 && parts[1] !== KEEP_PLATFORM[scope]) return "drop";
+  if (!jsFront && scope in keep && parts.length >= 2 && !keep[scope].includes(parts[1])) return "drop";
   const last = parts[parts.length - 1];
   if (last.endsWith(".map") || last.endsWith(".d.ts") || last.endsWith(".d.mts") || last.endsWith(".d.cts")) return "drop";
+  if (BUILD_LEFTOVERS.some((ext) => last.toLowerCase().endsWith(ext))) return "drop";
   if (options.dropLlamaSource === true && parts[0] === "node-llama-cpp" && parts[1] === "llama") return "drop";
   return "keep";
 }
 
-const FORBIDDEN_EXTENSIONS = [".map", ".p12", ".p8", ".pem", ".cer", ".key", ".keychain-db", ".provisionprofile", ".gguf", ".log", ".jsonl"];
+const FORBIDDEN_EXTENSIONS = [".map", ".p12", ".p8", ".pem", ".cer", ".key", ".keychain-db", ".provisionprofile", ".gguf", ".log", ".jsonl", ".pfx", ...BUILD_LEFTOVERS];
 const BINARY_EXTENSIONS = [".node", ".dylib", ".so", ".dll", ".metallib"];
-const BINARY_HOMES = ["node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/", "node_modules/@reflink/reflink-darwin-arm64/"];
 
 /**
  * The must-not-ship rule over a path relative to the asar root (posix). `null` means allowed; a
  * code names why not. Outside node_modules only package.json and dist/ exist at all, and dist/
  * holds only what shipList allowed (this checks the negatives again, from the other side, so a
- * staging step that forgot to call shipList would still be caught). Native binaries may live in
- * exactly two folders. Dotfiles are never allowed anywhere (a `.env`, a `.git`, a `.DS_Store`).
+ * staging step that forgot to call shipList would still be caught). Native binaries may live only in
+ * the platform's binary homes (`TARGETS`). Dotfiles are never allowed anywhere (a `.env`, a `.git`,
+ * a `.DS_Store`). `platform` is the system being packaged; macOS when not given.
  */
-export function forbidden(relPath) {
+export function forbidden(relPath, platform = "darwin") {
+  const target = targetFor(platform) ?? TARGETS.darwin;
+  const keep = target.keep;
   const path = relPath.split("\\").join("/");
   const parts = path.split("/").filter((p) => p.length > 0);
   if (parts.length === 0) return "EMPTY_PATH";
   if (parts.some((p) => p.startsWith("."))) return "DOTFILE";
   const last = parts[parts.length - 1].toLowerCase();
   if (FORBIDDEN_EXTENSIONS.some((ext) => last.endsWith(ext))) return "FORBIDDEN_FILE";
-  if (BINARY_EXTENSIONS.some((ext) => last.endsWith(ext)) && !BINARY_HOMES.some((home) => path.startsWith(home))) return "BINARY_OUTSIDE_ITS_HOME";
+  if (BINARY_EXTENSIONS.some((ext) => last.endsWith(ext)) && !target.binaryHomes.some((home) => path.startsWith(home))) return "BINARY_OUTSIDE_ITS_HOME";
   if (parts[0] === "node_modules") {
     // Every node_modules level, nested ones included: a package's own node_modules may carry the
     // same things the top level must not.
@@ -147,8 +196,8 @@ export function forbidden(relPath) {
       const name = parts[i + 1];
       const sub = parts[i + 2];
       if (name === "typescript" || name === ".bin") return "FORBIDDEN_FILE";
-      if (name === "@node-llama-cpp" && sub !== undefined && sub !== KEEP_PLATFORM["@node-llama-cpp"]) return "OTHER_PLATFORM";
-      if (name === "@reflink" && sub !== undefined && sub !== "reflink" && sub !== KEEP_PLATFORM["@reflink"]) return "OTHER_PLATFORM";
+      if (name === "@node-llama-cpp" && sub !== undefined && !keep["@node-llama-cpp"].includes(sub)) return "OTHER_PLATFORM";
+      if (name === "@reflink" && sub !== undefined && sub !== "reflink" && !keep["@reflink"].includes(sub)) return "OTHER_PLATFORM";
     }
     if (last.endsWith(".d.ts") || last.endsWith(".d.mts") || last.endsWith(".d.cts")) return "FORBIDDEN_FILE";
     return null;
@@ -188,8 +237,8 @@ export function resolveOut(argv, home, appDir) {
     const named = given === "~" ? home : given.startsWith("~/") ? join(home, given.slice(2)) : given;
     dir = resolve(named);
   }
-  for (const banned of [resolve(join(home, "Applications")), "/Applications"]) {
-    if (dir === banned || dir.startsWith(banned + "/")) return {error: "OUT_IS_APPLICATIONS"};
+  for (const banned of [resolve(join(home, "Applications")), resolve("/Applications")]) {
+    if (dir === banned || dir.startsWith(banned + sep)) return {error: "OUT_IS_APPLICATIONS"};
   }
   return {dir};
 }
@@ -202,6 +251,36 @@ export function requestedFlavour(argv) {
   const value = argv[argv.indexOf("--flavour") + 1];
   if (typeof value !== "string" || !FLAVOURS.includes(value)) return {error: "BAD_FLAVOUR"};
   return {flavour: value};
+}
+
+/**
+ * How to run the pnpm at `path`: `{command, args}` to prepend, or `null` when it cannot be run.
+ *
+ * On Windows pnpm is usually a `pnpm.cmd` shim, and Node refuses to spawn a `.cmd` without a shell
+ * (EINVAL), while a shell would re-parse every argument, paths with spaces included. So a shim is
+ * replaced by the JavaScript entry it wraps, run with this Node: the shim of a global npm install
+ * sits beside `node_modules/pnpm/bin/pnpm.cjs`, the one in a `.bin` folder beside `../pnpm/bin/pnpm.cjs`.
+ * A path that already names a `.cjs`/`.mjs`/`.js` entry is run with Node as it is.
+ */
+export function pnpmInvocation(path, {nodePath, exists, join: joinPath = join, dirname: dirOf = dirname}) {
+  if (/\.(c|m)?js$/i.test(path)) return exists(path) ? {command: nodePath, args: [path]} : null;
+  if (/\.(cmd|bat)$/i.test(path)) {
+    const dir = dirOf(path);
+    const entry = [joinPath(dir, "node_modules", "pnpm", "bin", "pnpm.cjs"), joinPath(dir, "..", "pnpm", "bin", "pnpm.cjs")].find(exists);
+    return entry === undefined ? null : {command: nodePath, args: [entry]};
+  }
+  return exists(path) ? {command: path, args: []} : null;
+}
+
+/** Where pnpm and cargo are looked for when CLAVE_PNPM / CLAVE_CARGO do not say. */
+export function defaultTools(platform, home, env) {
+  if (platform === "win32") {
+    return {
+      pnpm: join(env.APPDATA ?? join(home, "AppData", "Roaming"), "npm", "pnpm.cmd"),
+      cargo: join(home, ".cargo", "bin", "cargo.exe")
+    };
+  }
+  return {pnpm: join(home, "Library", "pnpm", "bin", "pnpm"), cargo: "/opt/homebrew/opt/rustup/bin/cargo"};
 }
 
 /** `name@version` for every package.json found under node_modules (hoisted layout: any depth). */
@@ -218,8 +297,11 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-export function stage({appDir, argv, env, home, log, err}) {
+export function stage({appDir, argv, env, home, log, err, platform = process.platform}) {
   const fail = (code, detail) => { err(`STAGE_FAILED ${code}${detail ? ` ${detail}` : ""}`); return 1; };
+  const target = targetFor(platform);
+  if (target === null) return fail("UNSUPPORTED_PLATFORM", platform);
+  const tools = defaultTools(platform, home, env);
   const out = resolveOut(argv, home, appDir);
   if (out.error) return fail(out.error);
   const asked = requestedFlavour(argv);
@@ -236,7 +318,7 @@ export function stage({appDir, argv, env, home, log, err}) {
 
   const distFiles = walk(dist).filter((e) => e.kind === "file").map((e) => e.rel);
   if (walk(dist).some((e) => e.kind === "symlink")) return fail("SYMLINK_IN_DIST");
-  const decided = shipList(distFiles, flavour);
+  const decided = shipList(distFiles, flavour, platform);
   if (decided.error) return fail(decided.error.code, decided.error.path);
 
   const appPackage = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8"));
@@ -255,7 +337,7 @@ export function stage({appDir, argv, env, home, log, err}) {
     mkdirSync(dirname(join(root, "dist", rel)), {recursive: true});
     cpSync(join(dist, rel), join(root, "dist", rel));
   }
-  cpSync(join(dist, decided.helper), join(staging, "helper", "clave-reader"));
+  cpSync(join(dist, decided.helper), join(staging, "helper", target.helper));
   writeFileSync(join(root, "package.json"), JSON.stringify(runtime, null, 2) + "\n");
 
   // The runtime closure, offline, from the store, at the lockfile's versions: the app's own lockfile
@@ -263,12 +345,13 @@ export function stage({appDir, argv, env, home, log, err}) {
   // (and, from the workspace file, keeps every build script switched off), then removed again.
   cpSync(join(appDir, "pnpm-lock.yaml"), join(root, "pnpm-lock.yaml"));
   cpSync(join(appDir, "pnpm-workspace.yaml"), join(root, "pnpm-workspace.yaml"));
-  const pnpm = env.CLAVE_PNPM ?? join(home, "Library", "pnpm", "bin", "pnpm");
-  if (!existsSync(pnpm)) return fail("PNPM_MISSING", pnpm);
+  const pnpm = env.CLAVE_PNPM ?? tools.pnpm;
+  const invoke = pnpmInvocation(pnpm, {nodePath: process.execPath, exists: existsSync});
+  if (invoke === null) return fail("PNPM_MISSING", pnpm);
   // `--no-frozen-lockfile`: the copied lockfile lists the whole app's dependencies and this
   // package.json names one of them, which pnpm counts as "outdated" and refuses under CI's default.
   // `--offline` still holds: nothing is fetched, and the versions are checked against the lockfile below.
-  const install = spawnSync(pnpm, ["install", "--prod", "--offline", "--no-frozen-lockfile", "--config.node-linker=hoisted", "--ignore-scripts", "--dir", root], {stdio: ["ignore", "pipe", "pipe"], env: {...env, CI: undefined}});
+  const install = spawnSync(invoke.command, [...invoke.args, "install", "--prod", "--offline", "--no-frozen-lockfile", "--config.node-linker=hoisted", "--ignore-scripts", "--dir", root], {stdio: ["ignore", "pipe", "pipe"], env: {...env, CI: undefined}});
   rmSync(join(root, "pnpm-lock.yaml"), {force: true});
   rmSync(join(root, "pnpm-workspace.yaml"), {force: true});
   if (install.status !== 0) {
@@ -280,27 +363,28 @@ export function stage({appDir, argv, env, home, log, err}) {
   const modules = join(root, "node_modules");
   if (!existsSync(modules)) return fail("PNPM_INSTALL_FAILED", "no node_modules");
   const lockText = readFileSync(join(appDir, "pnpm-lock.yaml"), "utf8");
-  const packageJsons = walk(modules).filter((e) => e.kind === "file" && posix.basename(e.rel) === "package.json" && pruneDecision(e.rel) === "keep")
+  const packageJsons = walk(modules).filter((e) => e.kind === "file" && posix.basename(e.rel) === "package.json" && pruneDecision(e.rel, {platform}) === "keep")
     .map((e) => { try { return JSON.parse(readFileSync(join(modules, e.rel), "utf8")); } catch { return null; } });
   for (const id of installedIds(packageJsons)) if (!lockHas(lockText, id)) return fail("LOCK_MISMATCH", id);
 
   // Prune: dropped directories go whole; walk order is parent-first, so a dropped parent's children
   // are simply gone by the time their turn comes.
   for (const entry of walk(modules)) {
-    if (pruneDecision(entry.rel) === "drop") rmSync(join(modules, entry.rel), {recursive: true, force: true});
+    if (pruneDecision(entry.rel, {platform}) === "drop") rmSync(join(modules, entry.rel), {recursive: true, force: true});
   }
 
   // The licence file: every component in the pruned closure, the helper's crates, Electron, and the
   // hand-kept entries; a missing or non-permissive licence refuses the whole run. Written into dist/
   // so it ships inside the asar; Electron's own two licence files are copied beside the root for the
   // bundle step to place in Contents/Resources.
-  const cargo = env.CLAVE_CARGO ?? "/opt/homebrew/opt/rustup/bin/cargo";
+  const cargo = env.CLAVE_CARGO ?? tools.cargo;
   if (!existsSync(cargo)) return fail("CARGO_MISSING", cargo);
-  const licences = generateLicences({root, appDir, flavour, cargo, env});
+  const licences = generateLicences({root, appDir, flavour, cargo, env, rustTarget: target.rustTarget});
   if (licences.error) return fail(licences.error, licences.detail);
   writeFileSync(join(root, "dist", "THIRD-PARTY-LICENSES.txt"), licences.text);
   mkdirSync(join(staging, "electron"), {recursive: true});
-  for (const file of licences.electronFiles) cpSync(file, join(staging, "electron", posix.basename(file)));
+  // `basename`, not `posix.basename`: these are real paths of this system, not the walk's posix ones.
+  for (const file of licences.electronFiles) cpSync(file, join(staging, "electron", basename(file)));
 
   const everything = walk(root);
   const symlink = everything.find((e) => e.kind === "symlink");
@@ -308,14 +392,16 @@ export function stage({appDir, argv, env, home, log, err}) {
   const entries = [];
   for (const entry of everything) {
     if (entry.kind !== "file") continue;
-    const why = forbidden(entry.rel);
+    const why = forbidden(entry.rel, platform);
     if (why) return fail(why, entry.rel);
     const full = join(root, entry.rel);
     entries.push({path: entry.rel, bytes: statSync(full).size, sha256: sha256(full)});
   }
-  if (lstatSync(join(staging, "helper", "clave-reader")).isSymbolicLink()) return fail("SYMLINK_IN_STAGING", "helper");
-  const helperPath = join(staging, "helper", "clave-reader");
-  const result = {...manifest(entries, info), helper: {bytes: statSync(helperPath).size, sha256: sha256(helperPath)}};
+  const helperPath = join(staging, "helper", target.helper);
+  if (lstatSync(helperPath).isSymbolicLink()) return fail("SYMLINK_IN_STAGING", "helper");
+  // `platform` says which system this staging is for, so the steps after it (and the tests that read a
+  // real run) judge it by that system's rules; a manifest without one is from before Windows, i.e. macOS.
+  const result = {...manifest(entries, info), platform, helper: {name: target.helper, bytes: statSync(helperPath).size, sha256: sha256(helperPath)}};
   writeFileSync(join(staging, "manifest.json"), JSON.stringify(result, null, 2) + "\n");
   log(`STAGE_OK ${flavour} files ${result.fileCount} bytes ${result.totalBytes} licences ${licences.counts.packages}+${licences.counts.crates} at ${staging}`);
   return 0;

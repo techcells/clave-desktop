@@ -28,7 +28,9 @@ const env = {...process.env, [pathKey]: `${dirname(cargo)}${delimiter}${process.
 const args = testing
   ? ["test", "--offline", "--locked", "--manifest-path", manifest]
   : ["build", "--release", "--offline", "--locked", "--manifest-path", manifest];
-const run = spawnSync(cargo, args, {stdio: "inherit", env});
+// Run inside the crate: cargo reads `.cargo/config.toml` from the directory it is started in, not
+// from the manifest's, and that file is what links the Windows helper's C runtime statically.
+const run = spawnSync(cargo, args, {stdio: "inherit", env, cwd: dirname(manifest)});
 if (run.status !== 0) { console.error("BUILD_NATIVE_FAILED CARGO_EXIT", run.status); process.exit(1); }
 
 if (!testing) {
