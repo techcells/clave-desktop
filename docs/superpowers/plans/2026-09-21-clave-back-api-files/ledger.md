@@ -331,3 +331,21 @@ Task 5 (curl against a local server) was never run — Task 12 is the first HTTP
 Google sign-in needs the dev OAuth client to allow `http://localhost:8080/signin-google` and the Key
 Vault credential; without the BackgroundProcessor the unique index does not exist and idempotency
 rests on the pre-check; to try the daily cap locally lower `AgentService.MaxAcceptedPerDay`.
+
+## Task 12 (partial, 2026-09-22) — record in `task12-record.md`
+
+PASSED over HTTP against a local clave-back on the dev database: password sign-in, profile names,
+taxonomy (2906 skills / 25 competencies, 16 s cold, hash version), one statement produced against the
+real taxonomy, approved, uploaded (200), shown on the profile with `source = 3`. NOT run: Google
+sign-in (needs the dev deployment), cancel, the rate-limit path; the HTTP repeat-upload check (unit
+tests cover it). INCIDENT: my test row broke the old dev deployment's profile read (strict BSON on the
+four new fields) — the owner deletes the row; lesson: never let a new write path reach a database an
+older deployment still reads. Observations for other sub-projects: tray count not visible (B);
+Google-path failure text under the Password field (B). Follow-ups found: server single-flight for the
+taxonomy build (three concurrent 16 s builds); the app asks for the taxonomy twice at sign-in.
+
+- 2026-09-22, owner: "Check it for yourself. You have access to Azure CLI." `Jwt-ExpirationMinutes`
+  = 43200 (30 days) on BOTH dev and prod (read via `az keyvault secret show`, value only).
+  Consequence: a token lives 30 days; the app renews it a day before expiry (the half-life rule never
+  fires earlier than that); only a machine asleep or offline for over 30 days is signed out. The
+  refresh-on-a-tick fix stands as the right shape. Question closed.
