@@ -110,10 +110,24 @@ jobs:
           pnpm --dir app build:native
           pnpm --dir app build -- --flavour "$FLAVOUR"
 
-      - name: Stage and bundle
+      - name: Stage
+        run: pnpm --dir app package:stage -- --flavour "$FLAVOUR"
+
+      - name: Show the staged platform packages
         run: |
-          pnpm --dir app package:stage -- --flavour "$FLAVOUR"
-          pnpm --dir app package:bundle -- --flavour "$FLAVOUR" --allow-download
+          echo "node $(node -p 'process.platform + " " + process.arch') pnpm $(pnpm -v) store $(pnpm store path)"
+          ls app/node_modules/.pnpm | grep -E "node-llama-cpp|reflink" || true
+          ls "app/out/$FLAVOUR/staging/app/node_modules/@node-llama-cpp" "app/out/$FLAVOUR/staging/app/node_modules/@reflink" || true
+          # The staging install again, in a scratch folder, with pnpm's own account of what it skipped.
+          scratch="$RUNNER_TEMP/stage-probe"; mkdir -p "$scratch"
+          cp app/pnpm-lock.yaml app/pnpm-workspace.yaml "$scratch/"
+          echo '{"name":"probe","version":"0.0.0","private":true,"dependencies":{"node-llama-cpp":"3.21.1"}}' > "$scratch/package.json"
+          env -u CI pnpm install --prod --offline --no-frozen-lockfile --config.node-linker=hoisted --ignore-scripts --dir "$scratch" --reporter=ndjson 2>&1 \
+            | grep -iE "mac-arm64-metal|reflink-darwin|skipped|optional" | head -20 || true
+          ls "$scratch/node_modules/@node-llama-cpp" || true
+
+      - name: Bundle
+        run: pnpm --dir app package:bundle -- --flavour "$FLAVOUR" --allow-download
 
       - name: Import the signing certificate
         env:
