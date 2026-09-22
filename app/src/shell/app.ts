@@ -270,6 +270,9 @@ async function start(): Promise<void> {
     idleSeconds: () => (SMOKE ? 0 : powerMonitor.getSystemIdleTime()),
     now: () => Date.now(), local: systemLocalTime, newId: () => randomUUID(),
     appVersion: app.getVersion(), modelSha256: SCRIPTED_MODEL ? "scripted" : PINNED_MODEL.sha256, production: MODE.production,
+    // Unpackaged, this process is Electron's own executable, and the window list names it "Electron"
+    // (on Windows from its version resource). A packaged build carries the flavour's name instead.
+    otherSelfNames: app.isPackaged ? [] : ["Electron"],
     notifyReview: (count) => notify(COPY.notify.review(count), {onClick: showWindow}),
     notifyCaptureResumed: () => notify(COPY.notify.resumed, {silent: true}),
     ...(googleSignIn ? {googleSignIn} : {})

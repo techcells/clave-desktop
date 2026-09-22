@@ -27,11 +27,34 @@ describe("before capture", () => {
 
   it("without selfApp, or with a malformed one, only the built-in release name is denied", () => {
     expect(createExclusions({exclusions: [], excludedSites: []}).before({app: "Clave Agent Internal", title: "Review"})).toBeNull();
-    for (const selfApp of ["", "   ", 7, null, ["Clave Agent Internal"]]) {
+    for (const selfApp of ["", "   ", 7, null, [7, "", null], {name: "Clave Agent Internal"}]) {
       const x = createExclusions({exclusions: [], excludedSites: [], selfApp});
       expect(x.before({app: "Clave Agent Internal", title: "Review"}), String(selfApp)).toBeNull();
       expect(x.before({app: "Clave Agent", title: "Review"})).toBe("excludedApp");
     }
+  });
+
+  it("reads a browser only where its band was measured: by name AND by the bundle id the reader gives", () => {
+    const x = createExclusions({exclusions: [], excludedSites: []});
+    // Measured: Chrome and Safari on macOS, Edge on Windows.
+    expect(x.before({app: "Google Chrome", bundleId: "com.google.Chrome", title: "Docs"})).toBeNull();
+    expect(x.before({app: "Safari", bundleId: "com.apple.Safari", title: "Docs"})).toBeNull();
+    expect(x.before({app: "Microsoft Edge", bundleId: "msedge.exe", title: "Docs"})).toBeNull();
+    // The same names elsewhere are not measured, and are refused before anything is captured.
+    expect(x.before({app: "Google Chrome", bundleId: "chrome.exe", title: "Docs"})).toBe("excludedApp");
+    expect(x.before({app: "Microsoft Edge", bundleId: "com.microsoft.edgemac", title: "Docs"})).toBe("excludedApp");
+    // Unmeasured browsers stay refused.
+    expect(x.before({app: "Brave Browser", bundleId: "brave.exe", title: "Docs"})).toBe("excludedApp");
+    // After the read, an unmeasured Windows Chrome has no strip and is never kept either.
+    expect(x.after({app: "Google Chrome", bundleId: "chrome.exe", title: "Docs"}, undefined)).toBe("unknownWindow");
+  });
+
+  it("denies every name in a selfApp list, such as an unpackaged run's \"Electron\", and only those", () => {
+    const x = createExclusions({exclusions: [], excludedSites: [], selfApp: ["Clave Agent Dev", "Electron", 7]});
+    expect(x.before({app: "Clave Agent Dev", title: "Review"})).toBe("excludedApp");
+    expect(x.before({app: "Electron", title: "Clave Agent Dev"})).toBe("excludedApp");
+    expect(x.before({app: "Clave Agent", title: "Review"})).toBe("excludedApp");
+    expect(x.before({app: "Electron Fiddle", title: "Sketch"})).toBeNull();
   });
 
   it("excludes personal messengers and password managers by default", () => {

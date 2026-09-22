@@ -24,8 +24,10 @@ export interface PipelineConfig {
    * The app's own name in THIS build (it differs per flavour: "Clave Agent", "Clave Agent Internal"),
    * excluded like a built-in so the app never reads its own window whatever it is called. Optional:
    * the built-in list still names the release name, so a caller that omits it loses nothing there.
+   * A list when the operating system may know this process by more than one name: an unpackaged
+   * run is "Electron" to the window list, whatever the flavour calls it.
    */
-  selfApp?: string;
+  selfApp?: string | readonly string[];
   taxonomyVersion: string;
   skills: Skill[];
   competencies: Competency[];
