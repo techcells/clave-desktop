@@ -10,7 +10,12 @@ describe("reader port: everything from the reader is checked", () => {
     expect(parseFrontWindow({app: "Code", title: "a.ts", pid: 4})).toEqual({app: "Code", title: "a.ts"});
     expect(parseFrontWindow({app: "Code", bundleId: "com.ms", title: "a.ts"})).toEqual({app: "Code", bundleId: "com.ms", title: "a.ts"});
   });
-  it.each([null, undefined, "Code", {app: 7, title: "x"}, {app: "Code"}, {title: "x"}])("rejects %j", (value) => {
+  it("keeps the reader's bandWithheld only when it is true", () => {
+    const chrome = {app: "Google Chrome", bundleId: "chrome.exe", title: "Docs"};
+    expect(parseFrontWindow({...chrome, bandWithheld: true})).toEqual({...chrome, bandWithheld: true});
+    expect(parseFrontWindow({...chrome, bandWithheld: false})).toEqual(chrome);
+  });
+  it.each([null, undefined, "Code", {app: 7, title: "x"}, {app: "Code"}, {title: "x"}, {app: "Code", title: "x", bandWithheld: "yes"}, {app: "Code", title: "x", bandWithheld: 1}])("rejects %j", (value) => {
     expect(parseFrontWindow(value)).toBeNull();
   });
   it("passes a good read through", () => {

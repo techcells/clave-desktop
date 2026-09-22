@@ -25,7 +25,8 @@ use crate::text::Line;
 /// page (to 128.7), and at a device scale of 1 (the address row at 71.0 points, the page at 95).
 /// The table carries 71.3 plus 10%. That holds only for Chrome in English: the Russian badge came back
 /// from the recogniser as `OKHO B pexvwe VIHKorHVITO`, which matches nothing, so the Windows reader
-/// withholds this band from a Chrome it cannot show to be English (`win::chrome`).
+/// marks a Chrome it cannot show to be English as `band_withheld` (`win::chrome`), and such a window
+/// is refused before it is captured.
 const BANDS: &[(&str, f64)] =
     &[("com.google.Chrome", 82.0), ("com.apple.Safari", 41.0), ("msedge.exe", 76.0), ("chrome.exe", 78.0)];
 

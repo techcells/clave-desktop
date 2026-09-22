@@ -59,6 +59,9 @@ export function createExclusions(input: {exclusions: unknown; excludedSites: unk
       if (builtIn.has(front.app.trim().toLowerCase())) return "excludedApp";
       // Decided before anything is captured: a browser whose toolbar strip the reader cannot find is not read.
       if (isBrowser(front.app) && !isMeasuredBrowser(front)) return "excludedApp";
+      // Nor is a window the reader says its measured band does not hold for (Chrome on Windows in a
+      // language other than English), browser by name or not: the flag is the reader's own verdict.
+      if (front.bandWithheld === true) return "excludedApp";
       const hit = matchRule(user.rules, front);
       if (hit === "app") return "excludedApp";
       if (hit === "title") return "excludedTitle";

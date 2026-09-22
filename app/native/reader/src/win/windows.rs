@@ -32,6 +32,7 @@ use ::windows::Win32::UI::WindowsAndMessaging::{
 };
 use ::windows::core::{BOOL, PCWSTR, PWSTR, w};
 
+use super::chrome;
 use crate::platform::WindowInfo;
 
 /// The same floor as macOS, in the same unit: a window smaller than 100 points (logical pixels at
@@ -146,8 +147,22 @@ pub fn front_window() -> Option<WindowInfo> {
     if hwnd.0.is_null() || !ordinary(hwnd) {
         return None;
     }
+    info_of(hwnd)
+}
+
+/// What the app is told about this window, whether or not it is in front.
+pub fn info_of(hwnd: HWND) -> Option<WindowInfo> {
     let program = program_of_window(hwnd)?;
-    Some(WindowInfo { window_id: window_id(hwnd), app: program.name, bundle_id: Some(program.exe), title: title_of(hwnd) })
+    // Asked on every call rather than remembered: it is only ever asked of Chrome, and a Chrome
+    // restarted in another language keeps its executable, which is all the program cache knows.
+    let band_withheld = program.exe == chrome::EXE && !chrome::interface_is_english(hwnd);
+    Some(WindowInfo {
+        window_id: window_id(hwnd),
+        app: program.name,
+        bundle_id: Some(program.exe),
+        title: title_of(hwnd),
+        band_withheld,
+    })
 }
 
 fn ordinary(hwnd: HWND) -> bool {

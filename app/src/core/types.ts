@@ -1,4 +1,10 @@
-export interface FrontWindow { app: string; bundleId?: string; title: string }
+/**
+ * `bandWithheld` is the reader saying that this browser's measured toolbar band does not hold for
+ * this window, so its private-window badge cannot be read: today only Chrome on Windows in a language
+ * other than English (`native/reader/src/win/chrome.rs`). Present only when true. Such a window is
+ * refused before it is captured.
+ */
+export interface FrontWindow { app: string; bundleId?: string; title: string; bandWithheld?: true }
 
 export interface WindowRead extends FrontWindow {
   text: string;

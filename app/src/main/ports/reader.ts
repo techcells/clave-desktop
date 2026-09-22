@@ -101,7 +101,9 @@ export interface Reader {
   dispose(): Promise<void>;
 }
 
-const frontShape = z.object({app: z.string(), bundleId: z.string().optional(), title: z.string()});
+// `bandWithheld` must be a boolean when present: anything else fails the whole window, and no window
+// is nothing captured.
+const frontShape = z.object({app: z.string(), bundleId: z.string().optional(), title: z.string(), bandWithheld: z.boolean().optional()});
 const readShape = z.union([
   z.object({ok: z.literal(true), window: frontShape, text: z.string(), toolbarText: z.string().optional()}),
   // `detail` is `unknown` here rather than an enum, and deliberately: an enum would make a helper
@@ -116,8 +118,9 @@ const PERMISSIONS: readonly Permission[] = ["granted", "denied", "needsRestart",
 export function parseFrontWindow(value: unknown): FrontWindow | null {
   const parsed = frontShape.safeParse(value);
   if (!parsed.success) return null;
-  const {app, bundleId, title} = parsed.data;
-  return bundleId === undefined ? {app, title} : {app, bundleId, title};
+  const {app, bundleId, title, bandWithheld} = parsed.data;
+  const window: FrontWindow = bundleId === undefined ? {app, title} : {app, bundleId, title};
+  return bandWithheld === true ? {...window, bandWithheld: true} : window;
 }
 
 /**

@@ -49,7 +49,11 @@ describe("before capture", () => {
     const chrome = {app: "Google Chrome", bundleId: "chrome.exe", title: "CLAVE-BAND probe"};
     expect(x.after(chrome, "127.0.0.1:8765/probe.html")).toBeNull();
     expect(x.after(chrome, "127.0.0.1:8765/probe.html\nIncognito")).toBe("privateWindow");
-    // A Chrome the reader could not show to be English comes with no strip, and is never kept.
+    // A Chrome the reader could not show to be English is refused before anything is captured, and
+    // so is any window the reader flags the same way, whatever it is called.
+    expect(x.before({...chrome, bandWithheld: true})).toBe("excludedApp");
+    expect(x.before({app: "Notes", bundleId: "notes.exe", title: "Docs", bandWithheld: true})).toBe("excludedApp");
+    // A read that still arrives without its strip is never kept either.
     expect(x.after(chrome, undefined)).toBe("unknownWindow");
   });
 

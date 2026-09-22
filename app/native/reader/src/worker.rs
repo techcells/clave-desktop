@@ -290,6 +290,7 @@ mod tests {
                 app: "Some App".to_owned(),
                 bundle_id: None,
                 title: "Some Title".to_owned(),
+                band_withheld: false,
             })
         }
 

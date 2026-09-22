@@ -54,10 +54,8 @@ export const BROWSERS = [
  * "Microsoft Edge" only on Windows. The ids are exactly the keys of the reader's band table.
  *
  * `chrome.exe` is read only in English. Its badge is matched as the English word "Incognito", so the
- * Windows reader withholds the strip from a Chrome it cannot show to be English
- * (`app/native/reader/src/win/chrome.rs`), and `after` refuses a browser read with no strip. That
- * Chrome is captured and then dropped rather than refused up front, because the language is known
- * only to the reader.
+ * Windows reader marks a Chrome it cannot show to be English as `bandWithheld`
+ * (`app/native/reader/src/win/chrome.rs`), and `before` refuses that window before it is captured.
  *
  * `null` stands for a window that names no bundle id, which only the stand-in reader sends. The two
  * names that were read by name alone before bundle ids mattered keep that; a name measured since is

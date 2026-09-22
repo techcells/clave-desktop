@@ -95,13 +95,6 @@ impl Platform for WinPlatform {
         let (grey, width, height) = recognise::to_greyscale(&captured.frame).ok_or(())?;
         recognise::recognise_grey(&grey, width, height)
     }
-
-    /// Chrome's band was measured in English and its incognito badge is matched as an English word,
-    /// so Chrome's band holds only where its interface is shown to be English. Edge is left as it
-    /// was measured.
-    fn band_holds(&self, window: &WindowInfo) -> bool {
-        window.bundle_id.as_deref() != Some(chrome::EXE) || chrome::interface_is_english(windows::hwnd_of(window.window_id))
-    }
 }
 
 #[cfg(test)]
@@ -172,9 +165,9 @@ mod tests {
             let lines = platform.recognise(&captured).expect("the recogniser runs");
             let points = |fraction: f64| fraction * captured.frame.height as f64 / captured.scale;
             println!("== {title}  {}x{} px, scale {}", captured.frame.width, captured.frame.height, captured.scale);
-            let pid = windows::pid_of(hwnd).unwrap_or(0);
-            if windows::image_path(pid).is_some_and(|path| path.to_ascii_lowercase().ends_with(chrome::EXE)) {
-                println!("  Chrome's interface shown to be English: {}", chrome::interface_is_english(hwnd));
+            // `bandWithheld` is on this line for a Chrome that cannot be shown to be in English.
+            if let Some(info) = windows::info_of(hwnd) {
+                println!("  as frontWindow would answer: {}", crate::protocol::front_window_line(0, Some(&info)));
             }
             for line in crate::text::order(lines) {
                 println!("  top {:6.1}  bottom {:6.1}  x {:5.3}  {}", points(line.top), points(line.bottom), line.x, line.text);

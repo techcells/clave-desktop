@@ -112,6 +112,7 @@ mod tests {
                     app: "Some App".to_owned(),
                     bundle_id: None,
                     title: String::new(),
+                    band_withheld: false,
                 }),
                 requests: Cell::new(0),
             }

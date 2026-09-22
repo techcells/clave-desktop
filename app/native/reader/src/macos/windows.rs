@@ -164,6 +164,8 @@ pub fn front_window() -> Option<WindowInfo> {
                 app: app.unwrap_or_default(),
                 bundle_id: bundle_id_of(pid),
                 title,
+                // Every macOS band holds in the form it was measured in.
+                band_withheld: false,
             });
         }
         None
