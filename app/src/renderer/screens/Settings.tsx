@@ -4,6 +4,7 @@ import type {SettingsProblem} from "../../shared/ipc";
 import {clave, useAsked} from "../bridge";
 import {Button, Field, Submit, useAction, useHeading} from "../components/Controls";
 import {EntryList} from "../components/EntryList";
+import {FLAVOUR} from "../../shared/flavour";
 import {COPY, SETTINGS_PROBLEMS} from "../copy";
 import type {Shell} from "../shell";
 
@@ -24,6 +25,7 @@ export function Settings({shell}: {shell: Shell}): ReactNode {
   const [timeProblem, setTimeProblem] = useState<SettingsProblem | null>(null);
   const [time, setTime] = useState(settings.reviewTime);
   const [timeBusy, runTime] = useAction();
+  const [licencesMissing, setLicencesMissing] = useState(false);
   const heading = useHeading();
 
   // Nothing depends on the answer, but a rejected IPC call is still a rejected promise: unhandled,
@@ -95,7 +97,13 @@ export function Settings({shell}: {shell: Shell}): ReactNode {
           <div><dt>{COPY.settings.version}</dt><dd>{appInfo.version}</dd></div>
           <div><dt>{COPY.settings.modelHash}</dt><dd>{appInfo.modelSha256}</dd></div>
         </dl>
-        <p className="actions"><Button tone="quiet" label={COPY.common.whatLeaves} press={() => clave.openWhatLeaves()} /></p>
+        {FLAVOUR === "internal" ? <p className="note">{COPY.settings.internalBuild}</p> : null}
+        <p className="actions">
+          <Button tone="quiet" label={COPY.common.whatLeaves} press={() => clave.openWhatLeaves()} />
+          {/* The bundled licence file exists in packaged builds only; a missing one is said, not swallowed. */}
+          <Button tone="quiet" label={COPY.settings.licences} press={() => clave.openLicences().then((result) => setLicencesMissing(result === "LICENCES_MISSING"), () => setLicencesMissing(true))} />
+        </p>
+        {licencesMissing ? <p className="note">{COPY.settings.licencesMissing}</p> : null}
       </div>
     </div>
   );

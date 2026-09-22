@@ -183,6 +183,8 @@ body {
 }
 
 .mark { font-family: var(--mono); font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink); }
+/* The internal flavour's mark, on every screen: the attention colour, so it never reads as the release. */
+.mark-flavour { color: var(--attention); }
 
 .announce {
   grid-column: 2;

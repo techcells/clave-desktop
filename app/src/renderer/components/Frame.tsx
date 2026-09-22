@@ -1,4 +1,5 @@
 import type {ReactNode} from "react";
+import {FLAVOUR} from "../../shared/flavour";
 import {COPY} from "../copy";
 import type {Screen, Step} from "../model/views";
 import {STEPS} from "../model/views";
@@ -24,6 +25,8 @@ export function Frame({spine, tone, announce, tabs, children}: {
       <div className="spine" aria-hidden="true">{spine}</div>
       <header className="masthead">
         <span className="mark">{COPY.appName}</span>
+        {/* The internal flavour says so on every screen: it uploads nothing and is not the release. */}
+        {FLAVOUR === "internal" ? <span className="mark mark-flavour">{COPY.settings.internalMark}</span> : null}
       </header>
       <p className={`announce announce-${tone}`} aria-live="polite">{announce}</p>
       <main className="sheet" tabIndex={-1}>{children}</main>

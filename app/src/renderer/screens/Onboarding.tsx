@@ -5,9 +5,9 @@ import {clave, useDownload} from "../bridge";
 import {Unreachable} from "../components/Boundary";
 import {Button, Field, Meter, Submit, useAction, useHeading} from "../components/Controls";
 import {EntryList} from "../components/EntryList";
-import {BLOCKERS, CLAIMS, COPY, downloadProblem, KNOWN_LIMITS, PERMISSION_STEPS, SETTINGS_PROBLEMS, SIGN_IN_PROBLEMS} from "../copy";
+import {APP_FILE, BLOCKERS, CLAIMS, COPY, downloadProblem, KNOWN_LIMITS, PERMISSION_STEPS, SETTINGS_PROBLEMS, SIGN_IN_PROBLEMS} from "../copy";
 import type {Step} from "../model/views";
-import {STEPS, downloadView, gigabytes, stillWaiting} from "../model/views";
+import {STEPS, downloadView, gigabytes, isTranslocated, stillWaiting} from "../model/views";
 import type {Shell} from "../shell";
 
 /**
@@ -215,6 +215,26 @@ const PERMISSION_POLL_MS = 1500;
  * it keeps its own sentence and its own button.
  */
 function PermissionStep({shell}: {shell: Shell}): ReactNode {
+  // Running from macOS's translocation folder: nothing is asked for until the app has been moved
+  // (main's requestPermission is a no-op there too). Decided before any hook so the hooks below
+  // stay unconditional: the branch renders its own component.
+  if (isTranslocated(shell.appInfo)) return <MoveToApplications />;
+  return <PermissionAsk shell={shell} />;
+}
+
+/** The permission step's stand-in while the app runs from the translocation folder. */
+function MoveToApplications(): ReactNode {
+  const heading = useHeading();
+  return (
+    <>
+      <h1 className="title" tabIndex={-1} ref={heading}>{COPY.onboarding.translocated.title}</h1>
+      <p className="lede">{COPY.onboarding.translocated.lead}</p>
+      <ol className="steps">{COPY.onboarding.translocated.steps(APP_FILE).map((instruction) => <li key={instruction}>{instruction}</li>)}</ol>
+    </>
+  );
+}
+
+function PermissionAsk({shell}: {shell: Shell}): ReactNode {
   const [permission, setPermission] = useState<Permission | null>(null);
   const [waitedLong, setWaitedLong] = useState(false);
   const {askStatus} = shell;

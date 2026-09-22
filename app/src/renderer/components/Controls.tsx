@@ -77,9 +77,9 @@ export function useAction(): [boolean, (start: () => void | Promise<unknown>) =>
  *
  * `busy` is for a button that does NOT own its action: two buttons that answer the same row (Approve
  * and Reject) share one `useAction`, so that pressing either one disables BOTH — a row must not be
- * able to have an approve and a reject in flight at the same time. When `press` hands the work to a
- * shared `run` it returns nothing, so the button's own `useAction` stays idle and `busy` is the only
- * thing speaking.
+ * able to have an approve and a reject in flight at the same time. The pressed one gets `busy`, the
+ * other only `disabled`. When `press` hands the work to a shared `run` it returns nothing, so the
+ * button's own `useAction` stays idle and `busy` is the only thing speaking.
  */
 export function Button({label, press, tone = "line", disabled, describedBy, ariaLabel, busy, hold}: {
   label: string;

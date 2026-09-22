@@ -168,9 +168,9 @@ export function Review({shell}: {shell: Shell}): ReactNode {
 
 /**
  * One statement, one decision. The row holds ONE action state and both buttons read it, so while
- * either decision is in flight both are disabled and both say `aria-busy` — a row can never have an
- * approve and a reject on the way at the same time. (Main refuses the second one anyway; this is so
- * the window never asks.)
+ * either decision is in flight both are disabled — a row can never have an approve and a reject on
+ * the way at the same time. Only the pressed one says `aria-busy` (and runs its hairline); the other
+ * is just disabled. (Main refuses the second one anyway; this is so the window never asks.)
  */
 function Row({row, answer, hold}: {
   row: ReviewRow;
@@ -178,6 +178,10 @@ function Row({row, answer, hold}: {
   hold: (button: HTMLButtonElement | null) => void;
 }): ReactNode {
   const [busy, run] = useAction();
+  const [pressed, setPressed] = useState<Decision | null>(null);
+  const decide = (decision: Decision) => run(() => { setPressed(decision); return answer(decision); });
+  const working = (decision: Decision) => busy && pressed === decision;
+  const waiting = (decision: Decision) => busy && pressed !== decision;
   return (
     <li className="row">
       <p className="row-head">
@@ -187,8 +191,8 @@ function Row({row, answer, hold}: {
       <p className="statement">{row.statement}</p>
       <p className="meta">{row.kind === "skill" ? COPY.review.skill : COPY.review.competency}</p>
       <div className="decide">
-        <Button tone="equal" busy={busy} hold={hold} label={COPY.review.approve} ariaLabel={COPY.review.approveThis(row.statement)} press={() => run(() => answer("approve"))} />
-        <Button tone="equal" busy={busy} label={COPY.review.reject} ariaLabel={COPY.review.rejectThis(row.statement)} press={() => run(() => answer("reject"))} />
+        <Button tone="equal" busy={working("approve")} disabled={waiting("approve")} hold={hold} label={COPY.review.approve} ariaLabel={COPY.review.approveThis(row.statement)} press={() => decide("approve")} />
+        <Button tone="equal" busy={working("reject")} disabled={waiting("reject")} label={COPY.review.reject} ariaLabel={COPY.review.rejectThis(row.statement)} press={() => decide("reject")} />
       </div>
     </li>
   );

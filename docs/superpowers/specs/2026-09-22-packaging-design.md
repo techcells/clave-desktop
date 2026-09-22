@@ -1,6 +1,6 @@
 # Packaging, signing and notarisation: design
 
-Written 2026-09-22. Status: **decisions 1-4 DECIDED 2026-09-22; decisions 5-7 of section 13 open; Tasks 0-6 of the plan executed and reviewed (see the ledger).** Nothing in this document has
+Written 2026-09-22. Status: **all seven decisions of section 13 DECIDED 2026-09-22; Tasks 0-6 of the plan executed and reviewed (see the ledger).** Nothing in this document has
 been built. The ledger for this sub-project is
 `docs/superpowers/plans/2026-09-22-packaging-files/ledger.md`.
 
@@ -382,9 +382,9 @@ screens). The owner decides between "nothing" and "a daily version check".
 3. ~~Confirm the bundle id family `dev.clave.agent` (from the dev bundle's `dev.clave.agent.dev`;
    it implies the owner controls `clave.dev`) or name another domain.~~ **DECIDED 2026-09-22: `dev.clave.agent`.**
 4. ~~Confirm the legal name for `NSHumanReadableCopyright` and the Developer ID (TeamEx, as stated).~~ **DECIDED 2026-09-22: the copyright line says "Clave"; the Developer ID enrolment stays under TeamEx.**
-5. Updates: nothing (recommended) or a daily version check.
-6. An app icon: supply one, or ship Electron's for the internal flavour and decide before release.
-7. Confirm the model's licence from its model card, for the licence file.
+5. ~~Updates: nothing (recommended) or a daily version check.~~ **DECIDED 2026-09-22: nothing; a click-only link in About.**
+6. ~~An app icon: supply one, or ship Electron's for the internal flavour and decide before release.~~ **DECIDED 2026-09-22: the mobile app's icon, masked for macOS by `scripts/package/make-icon.sh` into `app/build/icon.icns`.**
+7. ~~Confirm the model's licence from its model card, for the licence file.~~ **DECIDED 2026-09-22: Apache-2.0, as the model card states.**
 
 ## 14. Notes added while building (2026-09-22, additions only)
 

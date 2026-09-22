@@ -349,3 +349,20 @@ taxonomy build (three concurrent 16 s builds); the app asks for the taxonomy twi
   Consequence: a token lives 30 days; the app renews it a day before expiry (the half-life rule never
   fires earlier than that); only a machine asleep or offline for over 30 days is signed out. The
   refresh-on-a-tick fix stands as the right shape. Question closed.
+
+## Front-end label (clave-front, 2026-09-22) — working tree of `prod`, UNCOMMITTED
+
+Owner: "Yes, let's add this in this chat." Done: OpenAPI types regenerated from the local clave-back
+(`backend-api.ts` gains the agent routes/DTOs and `CallEvidenceSourceDto.DesktopAgent`; `backend-ws.ts`
+gains one line already on the backend; the Diza drift was restored, unrelated); `TagEvidence.isPrivate`
+→ `source: 'call' | 'private' | 'desktop'` (mapping in `profilePage.ts`: a non-call row gets no callId,
+peer or moment whatever the wire carries; fixtures show all three kinds; `callExtractionView` = 'call');
+web `ProfilePage.tsx` renders a desktop row as tag "◆ seen at work" + meta "by clave agent · <ago>", no
+affordance (like private). Owner 2026-09-22: rejected "own work / self-approved" ("nothing self about
+it, it is extracted automatically; the user only picks whether to send") and chose "seen at work". Tests: +1 (desktop) and the two existing updated; 2 mutations caught;
+typecheck ×3 workspaces, 591 tests, eslint, prettier clean. Seen in the browser on mocks
+(`/@mockuser`, skill "hiring funnels"): recorded / private session / own work rows side by side.
+Mobile has no evidence-row renderer. Wording proposed to the owner; commit awaits his word.
+- 2026-09-22: front-end committed on `prod` as `1e0472b` ("profile evidence: label desktop-agent rows
+  as seen at work"), not pushed. clave-back `f6989a3` on `prod`, not pushed. App repo: D's code in
+  `c67eb0c` (packaging session's sweep) + `470154a` (D's ledger docs). Nothing pushed anywhere.

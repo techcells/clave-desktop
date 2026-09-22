@@ -60,6 +60,17 @@ Design: docs/superpowers/specs/2026-09-22-packaging-design.md (DRAFT, awaiting a
 - 2026-09-22 (decision 4, copyright entity): "let's go with `Clave` instead" -> NSHumanReadableCopyright =
   "Copyright (c) <build year> Clave" (ruling R14 superseded); the internal bundle rebuilt with it.
 
+- 2026-09-22 (decision 5, updates; to "Nothing, or the daily check?"): "Yes, I agree." = no update mechanism;
+  About gets a click-only "Get the latest version" line (Task 9). Download page URL still to be named.
+
+- 2026-09-22 (decision 6, icon): "Here is access to the frontend project. See if you can find anything useful
+  regarding the icons." (added /Users/sardorastanov/techcells/clave-front as a working directory).
+
+- 2026-09-22 (decision 6, the generated icon shown as a preview): "yes" = APPROVED for both flavours.
+
+- 2026-09-22 (decision 7, model licence Apache-2.0 per the model card): "sure" = CONFIRMED; licences.fixed.json
+  updated; a release build no longer refuses on MODEL_LICENCE_UNCONFIRMED.
+
 ## Rulings made on the owner's behalf (with cost if wrong)
 
 - R1 (2026-09-22): no `git init`, commit or push by an agent even after his "let's push"; the folder had
@@ -460,6 +471,17 @@ Program under TeamEx (Task 7), then Task 8 (notarised build with a version bump,
 entitlement ladder), Task 10 (P1/P2/P6 again plus P7 under the Developer ID). Remaining for packaging
 without the owner: Task 9's renderer screen and About lines.
 
+## Icon (decision 6) record (2026-09-22)
+
+Found in clave-front: apps/mobile/assets/appicon-ios-1024.png (1024x1024, no alpha; the mobile app's icon
+per app.json: an off-white "c" on #101114), icon.png (same), adaptive-icon.png (Android), apps/web/
+public/favicon.svg (the same mark as text). Built: scripts/package/make-icon.swift (system frameworks
+only: draws the source inside macOS's rounded square, 824/1024 of the canvas, corner radius 22.4 %, on
+a transparent canvas, at the ten .iconset sizes) and make-icon.sh (swift + iconutil) -> app/build/
+icon.icns (154 KB, "ic12" type) and app/build/icon-preview.png. bundle.mjs already takes
+app/build/icon.icns when present (ruling R15). Proposed to the owner as decision 6: use the mobile
+app's mark; nothing in the frontend repo was modified.
+
 ## Session plan: the first launch of a PACKAGED build (Task 5, second half; owner at the machine)
 
 Artefact: app/out/internal/artefacts/Clave-Agent-Internal-0.1.0-20260922.0841-arm64.dmg (self-signed
@@ -517,6 +539,28 @@ tested, notaryResult reads JSON first (stdout and stderr merged), artefactBaseNa
 more direct devDependency: owner's call, cost nil); a failed staple retry needs a resubmit; no pre-flight
 profile check (the first `notarytool` call is the check).
 
+## Task 9 record (2026-09-22): the renderer's half
+
+Built (renderer only; the main-side pieces landed with D's change request): copy.ts gains
+onboarding.translocated (title, lead, three steps naming the .app FILE via APP_FILE) and
+settings.licences / licencesMissing / internalBuild / internalMark; Onboarding.tsx's permission step
+renders MoveToApplications instead of the permission ask when `isTranslocated(appInfo)` (decided before
+any hook; the ask moved into PermissionAsk unchanged); Settings.tsx About gains a "Third-party licences"
+quiet button calling openLicences and showing "The licence file is not part of this build." on
+LICENCES_MISSING, plus the internal-build note when FLAVOUR === "internal"; Frame.tsx's masthead shows
+"internal build" in the attention colour for that flavour (.mark-flavour); views.ts isTranslocated
+(exact true only) + tests; the translocation copy tested (names the file, says quit / move / open,
+never says "system settings" or "allow"); mockBridge gains the "onboarding-translocated" scenario (the
+permission step's state with translocated:true). Looked at in the dev preview (clave-preview server,
+scenarios onboarding-translocated and settings): the step and the About lines render; the licences
+button shows the missing note under the mock. Revert proofs: isTranslocated truthy -> 1 fails; copy
+without the file name -> 1 fails. NOT built: the click-only "Get the latest version" line (needs the
+download page URL, decision pending, and an openExternal-style IPC from D since the renderer cannot
+open a browser; recorded as a request once the URL exists); the build number in About (AppInfo has no
+such field; main would read dist/build.json — D's file; recorded as optional). Ruling R26: the UI
+follows the existing screens' patterns (classes lede/steps/note/facts/actions) rather than a new
+design pass: three lines and one step inside an established design.
+
 ## Self-exclusion edit record (Task 1 finding I1, 2026-09-22, owner-permitted)
 
 Edited: src/core/types.ts (PipelineConfig.selfApp?: string), src/core/exclusions/index.ts (createExclusions
@@ -557,7 +601,8 @@ whose app equals selfApp is `excludedApp`. Until it lands the internal build mus
 
 ## Open (waiting on the owner)
 
-- Decisions 5-7 of spec section 13 (1-4 decided 2026-09-22: id family dev.clave.agent; copyright "Clave").
+- All seven decisions of spec section 13 are made (2026-09-22). Still owner-only: the Developer Program (Task 7).
+- The download page URL for About's click-only link, plus an `openDownloadPage` IPC from D's session (Task 9's last line).
 - The change request for D's session was handed over by the owner (2026-09-22); Task 5's measurement waits for it.
 - (closed) the self-exclusion edit was made by packaging with the owner's permission.
 - Apple Developer Program enrolment under TeamEx (owner only).

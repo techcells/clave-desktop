@@ -170,6 +170,22 @@ export const COPY = {
       ],
       aside: "macOS may offer Quit & Reopen. Later is fine."
     },
+    /**
+     * Shown INSTEAD of the permission step when the app is running from the temporary place macOS
+     * gives a downloaded app that was opened where it landed (App Translocation; packaging design,
+     * section 7). From there the Screen Recording grant was never measured and an app in an
+     * unregistered place gets a grant nobody can see or revoke, so nothing is asked for until the
+     * app has been moved. `steps` takes the .app file name for the same reason `permission.steps` does.
+     */
+    translocated: {
+      title: "Move the app to Applications",
+      lead: "This app is running from a temporary place macOS makes for an app that is opened straight from a download. Screen Recording cannot be set up from there.",
+      steps: (appFile: string): readonly string[] => [
+        "Quit this app from its menu bar icon.",
+        `Move “${appFile}” into the Applications folder.`,
+        "Open it from there. Onboarding continues where it stopped."
+      ]
+    },
     neverRead: "What is never read", privateWindows: "Chrome and Safari are read, except their private windows. Other browsers are not read yet.",
     reviewTime: "When should I show you today's evidence?", done: "All set. Reading stays off until you switch it on.",
     step: (n: number, of: number) => `Step ${n} of ${of}`,
@@ -196,6 +212,10 @@ export const COPY = {
     title: "Settings", apps: "Excluded apps", sites: "Excluded sites", addApp: "Name of an app", addSite: "A site, like example.com",
     reviewTime: "Review time", account: "Account", localData: "Local data", about: "About",
     version: "Version", modelHash: "Model",
+    licences: "Third-party licences", licencesMissing: "The licence file is not part of this build.",
+    /** The internal flavour's one permanent line (packaging design, section 2): it uploads nothing. */
+    internalBuild: "Internal build. Nothing is uploaded; approved statements stay in a local file.",
+    internalMark: "internal build",
     deleteWarning: "Every statement, the sent log and your sign-in are removed from this machine. This cannot be undone.",
     deleteConfirm: "Yes, delete everything", deleted: "Everything local was deleted."}
 } as const;

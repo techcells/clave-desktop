@@ -23,6 +23,7 @@ app/.dev-launch.json
 # Logs and test output
 *.log
 coverage/
+.vite/
 .vitest/
 
 # Editors and OS

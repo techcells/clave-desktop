@@ -5,7 +5,7 @@ import {describe, expect, it} from "vitest";
 import type {EngineStatus, NothingReadWhy, UserSettings} from "../../shared/ipc";
 import {NOTHING_READ_WHY} from "../../shared/ipc";
 import {APP_FILE, BLOCKERS, CLAIMS, COPY, KNOWN_LIMITS, NOTHING_READ, PERMISSION_STEPS} from "../copy";
-import {downloadView, firstBlocker, gigabytes, LONG_WAIT_MS, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
+import {downloadView, firstBlocker, gigabytes, isTranslocated, LONG_WAIT_MS, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
 
 const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus => ({capture: "off", resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null});
 const settings = (onboardingStep: number): UserSettings => ({exclusions: [], excludedSites: [], reviewTime: "17:30", captureOn: false, onboardingStep});
@@ -455,5 +455,29 @@ describe("what the renderer may import", () => {
   it("leaves an ordinary local or data url() alone", () => {
     expect(remoteProblems("@font-face { src: url(./assets/font.woff2); }")).toEqual([]);
     expect(remoteProblems('.a { background: url(data:image/png;base64,iVBORw0KGgo=); }')).toEqual([]);
+  });
+});
+
+describe("isTranslocated", () => {
+  it("is true only for an exact true from main; an older main without the field means no", () => {
+    expect(isTranslocated({translocated: true})).toBe(true);
+    expect(isTranslocated({translocated: false})).toBe(false);
+    expect(isTranslocated({})).toBe(false);
+    expect(isTranslocated({translocated: undefined})).toBe(false);
+    expect(isTranslocated({translocated: "true" as unknown as boolean})).toBe(false);
+  });
+});
+
+describe("the translocation copy", () => {
+  it("names the .app file the user must move, says what to do in order, and never asks for the grant", () => {
+    const steps = COPY.onboarding.translocated.steps(APP_FILE);
+    expect(steps).toHaveLength(3);
+    expect(steps[1]).toContain(APP_FILE);
+    expect((steps[0] ?? "").toLowerCase()).toContain("quit");
+    expect((steps[2] ?? "").toLowerCase()).toContain("open it");
+    for (const line of [COPY.onboarding.translocated.title, COPY.onboarding.translocated.lead, ...steps]) {
+      expect(line.toLowerCase()).not.toContain("system settings");
+      expect(line.toLowerCase()).not.toContain("allow");
+    }
   });
 });

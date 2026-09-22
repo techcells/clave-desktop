@@ -1,4 +1,4 @@
-import type {Blocker, DownloadState, EngineStatus, ReviewView, UserSettings} from "../../shared/ipc";
+import type {AppInfo, Blocker, DownloadState, EngineStatus, ReviewView, UserSettings} from "../../shared/ipc";
 import {COPY, NOTHING_READ} from "../copy";
 
 /** The onboarding steps of spec section 7, in order. */
@@ -40,6 +40,12 @@ export type Screen = "onboarding" | "home" | "review" | "settings";
  */
 export const startScreen = (status: EngineStatus, settings: UserSettings): Screen =>
   (settings.onboardingStep < STEPS.length ? "onboarding" : status.pending > 0 ? "review" : "home");
+
+/**
+ * Whether the app runs from macOS's translocation folder (main decides, from its own path; the
+ * field is optional on the wire so an older main means "no"). Only an exact `true` counts.
+ */
+export const isTranslocated = (info: Pick<AppInfo, "translocated">): boolean => info.translocated === true;
 
 /** The one problem shown on the home screen: the first blocker, in the engine's order. `null` when capture may run. */
 export const firstBlocker = (status: EngineStatus): Blocker | null => status.blockers[0] ?? null;

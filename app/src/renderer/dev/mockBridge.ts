@@ -15,14 +15,14 @@ import type {
  */
 
 export type Scenario =
-  | "onboarding-pitch" | "onboarding-signin" | "onboarding-model" | "onboarding-permission"
+  | "onboarding-pitch" | "onboarding-signin" | "onboarding-model" | "onboarding-permission" | "onboarding-translocated"
   | "onboarding-neverread" | "onboarding-reviewtime" | "onboarding-done"
   | "home-on" | "home-off" | "home-problem"
   | "home-nothing-notallowed" | "home-nothing-nowindow" | "home-nothing-other"
   | "review" | "review-empty" | "settings";
 
 export const SCENARIOS: readonly Scenario[] = [
-  "onboarding-pitch", "onboarding-signin", "onboarding-model", "onboarding-permission",
+  "onboarding-pitch", "onboarding-signin", "onboarding-model", "onboarding-permission", "onboarding-translocated",
   "onboarding-neverread", "onboarding-reviewtime", "onboarding-done",
   "home-on", "home-off", "home-problem",
   "home-nothing-notallowed", "home-nothing-nowindow", "home-nothing-other",
@@ -101,6 +101,8 @@ export function scenarioStart(scenario: Scenario): Start {
       // 42% of the pinned model size below, so the meter shows a real number.
       return {...base, ...onboarding(1, ["MODEL_MISSING", "NO_PERMISSION"]), download: {kind: "downloading", receivedBytes: Math.round(MODEL_BYTES * 0.42)}, permission: "denied"};
     case "onboarding-permission":
+    // The same state as the permission step, seen from the translocation folder.
+    case "onboarding-translocated":
       return {...base, ...onboarding(1, ["NO_PERMISSION"]), permission: "denied"};
     case "onboarding-neverread":
       return {...base, ...onboarding(1, [])};
@@ -263,7 +265,7 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
       pushDownload({kind: "partial", receivedBytes: received});
     },
     recentApp: async () => "Figma",
-    appInfo: async () => APP_INFO,
+    appInfo: async () => ({...APP_INFO, translocated: scenario === "onboarding-translocated"}),
     openWhatLeaves: async () => undefined,
     openLicences: async () => "LICENCES_MISSING",
     restartApp: async () => {
