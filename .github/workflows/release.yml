@@ -1,0 +1,193 @@
+# Builds the macOS app and, on a version tag, publishes it as a GitHub Release (DMG, ZIP, SHA256SUMS,
+# the artefacts report). Runs the same pipeline as a local build (docs/superpowers/plans/2026-09-22-packaging.md):
+#   build:native -> build -> package:stage -> package:bundle -> package:sign -> package:artefacts
+#
+# Triggers:
+#   push a tag vX.Y.Z   builds and publishes a release (the tag must equal app/package.json's version)
+#   Run workflow        builds only; the DMG and ZIP are attached to the run as a workflow artifact
+#
+# Flavour: the "Run workflow" input, else the repository variable CLAVE_FLAVOUR, else `internal`.
+# An internal build is published as a pre-release.
+#
+# Repository settings this needs (Settings -> Secrets and variables -> Actions):
+#   variable MACOS_SIGNING_IDENTITY   the certificate NAME, e.g. "Clave Agent Dev" or
+#                                     "Developer ID Application: <Team> (<TEAMID>)"
+#   secret   MACOS_CERTIFICATE_P12    that certificate + private key exported as .p12, base64-encoded
+#   secret   MACOS_CERTIFICATE_PASSWORD  the .p12 export password
+#   Only with a Developer ID (required for flavour `release`, which must be notarised):
+#   secret   APPLE_ID, APPLE_APP_PASSWORD (app-specific password), APPLE_TEAM_ID
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      flavour:
+        description: Which app to build
+        type: choice
+        options: [internal, release]
+        default: internal
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      FLAVOUR: ${{ inputs.flavour || vars.CLAVE_FLAVOUR || 'internal' }}
+      SIGN_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+      HAS_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/native/reader
+
+      - name: Cache the Electron zip
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-${{ hashFiles('app/pnpm-lock.yaml') }}
+
+      - name: Check the configuration
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./app/package.json').version")
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match app/package.json version $version"; exit 1
+          fi
+          if [[ "$HAS_CERT" != "true" || -z "$SIGN_IDENTITY" ]]; then
+            echo "::error::set the MACOS_CERTIFICATE_P12 / MACOS_CERTIFICATE_PASSWORD secrets and the MACOS_SIGNING_IDENTITY variable"; exit 1
+          fi
+          if [[ "$FLAVOUR" == "release" && "$HAS_NOTARY" != "true" ]]; then
+            echo "::error::a release build must be notarised: set APPLE_ID, APPLE_APP_PASSWORD and APPLE_TEAM_ID"; exit 1
+          fi
+          # The scripts call pnpm and cargo by absolute path; point them at the runner's.
+          echo "CLAVE_PNPM=$(command -v pnpm)" >> "$GITHUB_ENV"
+          echo "CLAVE_CARGO=$(command -v cargo)" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          pnpm --dir app install --frozen-lockfile
+          # build:native and the licence step run cargo --offline: fetch the locked crates first.
+          cargo fetch --locked --manifest-path app/native/reader/Cargo.toml
+
+      - name: Typecheck and test
+        run: |
+          pnpm --dir app typecheck
+          pnpm --dir app test
+          pnpm --dir app test:native
+
+      - name: Build
+        run: |
+          pnpm --dir app build:native
+          pnpm --dir app build -- --flavour "$FLAVOUR"
+
+      - name: Stage and bundle
+        run: |
+          pnpm --dir app package:stage -- --flavour "$FLAVOUR"
+          pnpm --dir app package:bundle -- --flavour "$FLAVOUR" --allow-download
+
+      - name: Import the signing certificate
+        env:
+          P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/clave-signing.keychain-db"
+          keychain_password=$(openssl rand -base64 32)
+          echo "::add-mask::$keychain_password"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$P12_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # notarytool reads and writes its profile in the default keychain.
+          security default-keychain -d user -s "$keychain"
+          security find-identity -p codesigning "$keychain"
+          if [[ "$HAS_NOTARY" == "true" ]]; then
+            xcrun notarytool store-credentials clave-notary \
+              --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+          fi
+          echo "KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Sign
+        run: pnpm --dir app package:sign -- --flavour "$FLAVOUR" --sign "$SIGN_IDENTITY"
+
+      - name: Notarise and make the DMG and ZIP
+        run: |
+          set -euo pipefail
+          notarize=()
+          if [[ "$HAS_NOTARY" == "true" ]]; then notarize=(--notarize clave-notary); fi
+          pnpm --dir app package:artefacts -- --flavour "$FLAVOUR" ${notarize[@]+"${notarize[@]}"}
+          cd "app/out/$FLAVOUR/artefacts"
+          shasum -a 256 *.dmg *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Keep the notary logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notary-logs
+          path: app/out/*/artefacts.partial/*.log
+          if-no-files-found: ignore
+
+      - name: Attach to the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: clave-agent-${{ env.FLAVOUR }}-${{ env.VERSION }}-arm64
+          path: |
+            app/out/${{ env.FLAVOUR }}/artefacts/*.dmg
+            app/out/${{ env.FLAVOUR }}/artefacts/*.zip
+            app/out/${{ env.FLAVOUR }}/artefacts/SHA256SUMS
+            app/out/${{ env.FLAVOUR }}/artefacts/artefacts-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish the GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dir="app/out/$FLAVOUR/artefacts"
+          prerelease=()
+          if [[ "$FLAVOUR" != "release" ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" \
+            "$dir"/*.dmg "$dir"/*.zip "$dir/SHA256SUMS" "$dir/artefacts-report.json" \
+            --title "Clave Agent $GITHUB_REF_NAME" --generate-notes ${prerelease[@]+"${prerelease[@]}"}
+
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          if [[ -n "${KEYCHAIN:-}" ]]; then security delete-keychain "$KEYCHAIN" || true; fi
