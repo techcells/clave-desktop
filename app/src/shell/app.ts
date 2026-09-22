@@ -25,6 +25,7 @@ import {createReadyDownloader} from "../standins/readyDownloader";
 import {createSmokeCipher} from "../standins/smokeCipher";
 import {createStubApi} from "../standins/stubApi";
 import {createPowerSource, createSafeStorageCipher, createUtilityHostLink} from "./adapters";
+import {APP_IDS} from "./appId";
 import {watchBattery} from "./batteryLevel";
 import {devEnv} from "./devEnv";
 import {resolveApiUrl} from "./apiUrl";
@@ -330,6 +331,9 @@ async function start(): Promise<void> {
 }
 
 app.setName(APP_NAME);                                // before the lock, so both instances agree on who they are
+// Windows files the taskbar entry and every notification under this id; without it the review
+// notification is shown under a generic Electron id, or not at all (see appId.ts).
+if (process.platform === "win32") app.setAppUserModelId(APP_IDS[FLAVOUR]);
 if (!app.requestSingleInstanceLock()) app.quit();     // two instances would mean two sixty-minute buffers
 else {
   app.on("second-instance", () => { if (started) showWindow(); else showRequested = true; });
