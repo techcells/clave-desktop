@@ -51,6 +51,9 @@
    ============================================================================================ */
 
 :root {
+  /* Lets Chromium draw native control parts (the time field's clock icon, scrollbars) for the
+     current appearance; without it they stay light-mode dark-grey on the dark field. */
+  color-scheme: light dark;
   --paper: #f7f5f0;
   --raised: #fffdf8;
   --sunk: #efece4;
