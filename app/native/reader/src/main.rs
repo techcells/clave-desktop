@@ -34,21 +34,28 @@ mod worker;
 
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod stub;
+// Not `windows`: that is the name of the crate this module is written against.
+#[cfg(target_os = "windows")]
+mod win;
 
 #[cfg(target_os = "macos")]
 use crate::macos as sys;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use crate::stub as sys;
+#[cfg(target_os = "windows")]
+use crate::win as sys;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 #[cfg(target_os = "macos")]
 type SystemPlatform = macos::MacPlatform;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 type SystemPlatform = stub::StubPlatform;
+#[cfg(target_os = "windows")]
+type SystemPlatform = win::WinPlatform;
 
 fn main() {
     runtime::install_silent_panic_hook();

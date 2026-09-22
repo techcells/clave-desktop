@@ -50,6 +50,9 @@ pub struct Captured<I> {
 /// four different places — so drawing them costs nothing and is the difference between a diagnosis
 /// and a guess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Windows has no capture grant to refuse and no separate window-list query to come back empty, so
+// `Refused` and `NoContent` are only ever built by `macos::capture` (and by the tests).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub enum CaptureError {
     /// The system refused the capture (`SCStreamErrorDomain` -3801): the Screen Recording grant is
     /// not in force for whatever app is responsible for this process.
