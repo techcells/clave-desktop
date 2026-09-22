@@ -29,9 +29,12 @@ const wellFormed = (front: unknown): front is FrontWindow =>
   typeof front === "object" && front !== null
   && typeof (front as FrontWindow).app === "string" && typeof (front as FrontWindow).title === "string";
 
-export function createExclusions(input: {exclusions: unknown; excludedSites: unknown}): Exclusions {
+export function createExclusions(input: {exclusions: unknown; excludedSites: unknown; selfApp?: unknown}): Exclusions {
   // Exact app-name match: a substring rule for "Dock" would wrongly exclude "Docker Desktop".
   const builtIn = new Set(BUILT_IN_EXCLUSIONS.map((name) => name.toLowerCase()));
+  // The app's own name in this build joins the built-ins (packaging: an internal build is "Clave Agent
+  // Internal"). Anything but a non-blank string is ignored: the built-in release name still stands.
+  if (typeof input.selfApp === "string" && input.selfApp.trim().length > 0) builtIn.add(input.selfApp.trim().toLowerCase());
   const user = parseRules(input.exclusions);
   const sites = parseSites(input.excludedSites);
   const problems = [...user.problems, ...sites.problems];

@@ -20,7 +20,7 @@ export function background(promise: Promise<unknown>, write: (line: string) => v
 }
 
 /** The only reasons launch can fail before the window exists. Anything else is UNKNOWN. */
-export const START_FAILURES = ["NO_READER_YET", "STANDIN_TAXONOMY_INVALID", "STANDIN_IN_PRODUCTION", "READER_HELPER_MISSING"] as const;
+export const START_FAILURES = ["NO_READER_YET", "STANDIN_TAXONOMY_INVALID", "STANDIN_IN_PRODUCTION", "READER_HELPER_MISSING", "BAD_API_URL"] as const;
 export type StartFailure = typeof START_FAILURES[number] | "UNKNOWN";
 
 /**

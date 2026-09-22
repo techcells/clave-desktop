@@ -18,14 +18,16 @@ your Wi-Fi off, or watch its network traffic, and compare.
 | What | When | To |
 |---|---|---|
 | Your email or handle and your password | when you sign in (the password is never stored) | Clave |
+| If you choose "Sign in with Google": your own browser goes to Clave's Google sign-in page (the app never sees that password); Clave then sends your browser back to this app with a one-time code, and the app sends that code to Clave in exchange for your sign-in token | when you choose that button | Google, through your browser; then Clave |
 | A request for your own profile, which answers with the display names on your account | right after you sign in | Clave |
 | Your sign-in token, to be renewed | when it is within a day of expiring, and once more if a request is refused | Clave |
-| A request for the public list of skills | at sign-in, then at most once a day | Clave |
-| Each statement you approved: its text, the skill or competency it is about, when it was written, and version numbers | after you press Approve | Clave |
+| A request for the public list of skills, naming the version it already has | at sign-in, then once a day; after a failed check, again after fifteen minutes | Clave |
+| Each statement you approved: its text, the skill or competency it is about, when it was written, version numbers, and a random id for the statement so a repeat never counts twice | after you press Approve | Clave |
 | A request for the model file (about 2.7 GB, one time) | during set-up | `huggingface.co`, unless you point the app somewhere else |
 
 Nothing else. No screenshots, no screen text, no window titles, no app names, no file names, no
-rejected statements, no usage data. The "Sent" list in the app shows every statement that left.
+rejected statements, no usage data. The "Sent" list in the app shows every statement Clave kept; the
+rare one Clave refused is named there as well, below.
 
 Your own display names are asked for so that the app can keep *your* name out of your statements;
 they are stored on this machine, encrypted, and never sent anywhere. The site the model is
@@ -39,6 +41,9 @@ after set-up.
   keys, emails, card and phone numbers. It is gone when you quit.
 - On disk, encrypted with your Keychain: your sign-in token and the display names on your account,
   the statements waiting for your answer, and approved statements that have not been uploaded yet.
+  A statement Clave refuses (for example because the skill it names has since been retired) was
+  sent but not kept: it is removed from that waiting list and is not in "Sent"; the log records only
+  that one was refused.
 - On disk, readable: your settings, the public list of skills, the list of what was sent, the model
   file, and a log that can only hold fixed codes and numbers, never text.
 - "Delete all local data" in Settings removes all of it.

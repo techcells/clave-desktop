@@ -20,6 +20,12 @@ export interface Competency { id: string; name: string; description: string }
 export interface PipelineConfig {
   exclusions: string[];
   excludedSites: string[];
+  /**
+   * The app's own name in THIS build (it differs per flavour: "Clave Agent", "Clave Agent Internal"),
+   * excluded like a built-in so the app never reads its own window whatever it is called. Optional:
+   * the built-in list still names the release name, so a caller that omits it loses nothing there.
+   */
+  selfApp?: string;
   taxonomyVersion: string;
   skills: Skill[];
   competencies: Competency[];

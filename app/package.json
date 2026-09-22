@@ -12,11 +12,16 @@
     "build:preview": "node scripts/build.mjs --preview",
     "start": "node scripts/build.mjs && CLAVE_STANDINS=1 electron .",
     "start:scripted": "node scripts/build.mjs && CLAVE_STANDINS=1 CLAVE_SCRIPTED_MODEL=1 electron .",
+    "start:api": "node scripts/build.mjs && CLAVE_STANDINS=1 CLAVE_REAL_API=1 CLAVE_SCRIPTED_MODEL=1 electron .",
     "smoke": "node scripts/build.mjs && CLAVE_STANDINS=1 CLAVE_SCRIPTED_MODEL=1 CLAVE_SMOKE=1 CLAVE_DATA_DIR=\"$(mktemp -d)\" electron .",
     "eval:gate": "node scripts/build.mjs && node dist/eval-gate.mjs",
     "build:native": "node scripts/build-native.mjs",
     "test:native": "node scripts/build-native.mjs --test",
     "dev:bundle": "node scripts/build.mjs && node scripts/dev-bundle.mjs",
+    "package:stage": "node scripts/package/stage.mjs",
+    "package:bundle": "node scripts/package/bundle.mjs",
+    "package:sign": "node scripts/package/sign.mjs",
+    "package:artefacts": "node scripts/package/artefacts.mjs",
     "start:reader": "node scripts/build.mjs && node scripts/start-reader.mjs",
     "start:reader:scripted": "node scripts/build.mjs && node scripts/start-reader.mjs --scripted",
     "reader:eval": "node scripts/build.mjs && node scripts/reader-eval.mjs"
@@ -28,6 +33,8 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@electron/fuses": "2.1.3",
+    "@electron/packager": "20.3.0",
     "@types/node": "22.20.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.3",

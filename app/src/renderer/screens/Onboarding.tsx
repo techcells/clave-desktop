@@ -1,5 +1,5 @@
 import type {ReactNode} from "react";
-import {useEffect, useState} from "react";
+import {useEffect, useRef, useState} from "react";
 import type {Permission, SettingsProblem} from "../../shared/ipc";
 import {clave, useDownload} from "../bridge";
 import {Unreachable} from "../components/Boundary";
@@ -62,8 +62,31 @@ function SignIn({shell}: {shell: Shell}): ReactNode {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  const [inBrowser, setInBrowser] = useState(false);
+  const cancelledByUser = useRef(false);
   const [busy, run] = useAction();
   const heading = useHeading();
+
+  // The browser path is only offered by a build that has one (the real backend); a stand-in build has nothing to send the browser to.
+  const browserOffered = shell.appInfo.googleSignIn === true;
+
+  /** Same shape as `submit`: the answer, whatever it is, ends the waiting state and asks main for the status that now stands. */
+  const throughBrowser = async () => {
+    setInBrowser(true);
+    setProblem(null);
+    cancelledByUser.current = false;
+    try {
+      const result = await clave.signInWithGoogle();
+      // A wait the user ended themselves is not a failure to report; main answers it with the timeout code.
+      const silent = result.ok || (result.code === "OAUTH_TIMEOUT" && cancelledByUser.current);
+      setProblem(silent ? null : SIGN_IN_PROBLEMS[result.code]);
+      if (!result.ok) heading.current?.focus();
+    } finally {
+      setInBrowser(false);
+      shell.askStatus();
+    }
+  };
+  const cancelBrowser = () => { cancelledByUser.current = true; void clave.cancelGoogleSignIn(); };
 
   /**
    * The password leaves this component's state as soon as the call has been ANSWERED, whatever the
@@ -86,13 +109,26 @@ function SignIn({shell}: {shell: Shell}): ReactNode {
       <h1 className="title" tabIndex={-1} ref={heading}>{COPY.onboarding.signIn}</h1>
       <form onSubmit={(event) => { event.preventDefault(); run(submit); }}>
         <Field label={COPY.onboarding.identifier}>
-          {(id) => <input id={id} className="input" type="email" autoComplete="username" value={identifier} onChange={(e) => setIdentifier(e.target.value)} />}
+          {(id) => <input id={id} className="input" type="text" inputMode="email" autoComplete="username" spellCheck={false} value={identifier} onChange={(e) => setIdentifier(e.target.value)} />}
         </Field>
         <Field label={COPY.onboarding.password} problem={problem}>
           {(id, describedBy) => <input id={id} className="input" type="password" autoComplete="current-password" aria-describedby={describedBy} value={password} onChange={(e) => setPassword(e.target.value)} />}
         </Field>
-        <p className="actions"><Submit tone="ink" label={COPY.onboarding.signIn} busy={busy} /></p>
+        <p className="actions"><Submit tone="ink" label={COPY.onboarding.signIn} busy={busy} disabled={inBrowser} /></p>
       </form>
+      {browserOffered && !inBrowser && (
+        <p className="actions actions-or">
+          <span>{COPY.onboarding.or}</span>
+          <Button tone="line" label={COPY.onboarding.signInWithGoogle} press={() => run(throughBrowser)} disabled={busy} />
+        </p>
+      )}
+      {/* Always mounted, so the sentence arrives in a live region that already exists and is announced. */}
+      {browserOffered && (
+        <p className="actions" role="status" aria-live="polite">
+          {inBrowser ? COPY.onboarding.waitingForBrowser : ""}
+          {inBrowser && <Button tone="quiet" label={COPY.common.cancel} press={cancelBrowser} />}
+        </p>
+      )}
     </>
   );
 }

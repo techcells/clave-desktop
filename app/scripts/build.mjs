@@ -1,9 +1,12 @@
 // Bundles the four programs of the desktop app with esbuild. Run from the repo root: pnpm --dir app build
 import {build} from "esbuild";
-import {cpSync, existsSync, mkdirSync, rmSync, writeFileSync} from "node:fs";
+import {cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import {dirname, join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {findForbiddenRendererInputs, PREVIEW_FORBIDDEN, PRODUCTION_FORBIDDEN, rendererBuildOptions} from "./rendererBuildOptions.mjs";
+import {nodeModulesInputs, packageDirOf, standinInputs, uniquePackages} from "./bundled.mjs";
+import {chosenLicence, licenceField, pickLicenceFile} from "./package/licences.mjs";
+import {buildInfo, flavourDefines, parseFlavour} from "./flavour.mjs";
 
 const app = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(app, "dist");
@@ -23,17 +26,28 @@ if (!existsSync(whatLeaves)) {
   process.exit(1);
 }
 
+// Which app this build is (packaging design, section 2). Baked into every bundle as two string
+// literals; a bad `--flavour` value refuses rather than falling back to dev.
+const parsed = parseFlavour(process.argv);
+if (parsed.error) {
+  console.error("BUILD_FAILED", parsed.error, "use: --flavour dev|internal|release");
+  process.exit(1);
+}
+const flavour = parsed.flavour;
+const define = flavourDefines(flavour);
+
 rmSync(out, {recursive: true, force: true});
 mkdirSync(join(out, "renderer"), {recursive: true});
 
-const node = {bundle: true, platform: "node", target: "node22", sourcemap: false, logLevel: "warning"};
-const [, , , , rendererResult] = await Promise.all([
+// `absWorkingDir`: metafile input paths are then relative to app/, whatever the shell's cwd was.
+const node = {bundle: true, platform: "node", target: "node22", sourcemap: false, logLevel: "warning", define, absWorkingDir: app};
+const [mainResult, preloadResult, hostResult, , rendererResult] = await Promise.all([
   // Main process. CommonJS, so `__dirname` exists. Electron is provided by the runtime.
-  build({...node, entryPoints: [join(app, "src/shell/app.ts")], format: "cjs", outfile: join(out, "main.cjs"), external: ["electron"]}),
+  build({...node, entryPoints: [join(app, "src/shell/app.ts")], format: "cjs", outfile: join(out, "main.cjs"), external: ["electron"], metafile: true}),
   // A sandboxed preload must be CommonJS.
-  build({...node, entryPoints: [join(app, "src/shell/preload.ts")], format: "cjs", outfile: join(out, "preload.cjs"), external: ["electron"]}),
+  build({...node, entryPoints: [join(app, "src/shell/preload.ts")], format: "cjs", outfile: join(out, "preload.cjs"), external: ["electron"], metafile: true}),
   // The model host. node-llama-cpp is ESM with native binaries: never bundled.
-  build({...node, entryPoints: [join(app, "src/shell/modelHostEntry.ts")], format: "esm", outfile: join(out, "model-host.mjs"), external: ["electron", "node-llama-cpp"]}),
+  build({...node, entryPoints: [join(app, "src/shell/modelHostEntry.ts")], format: "esm", outfile: join(out, "model-host.mjs"), external: ["electron", "node-llama-cpp"], metafile: true}),
   // The release gate for the real model (a plain Node command, no Electron).
   build({...node, entryPoints: [join(app, "src/eval/gateCli.ts")], format: "esm", outfile: join(out, "eval-gate.mjs"), external: ["node-llama-cpp"]}),
   // The renderer: a browser bundle, always a PRODUCTION one. React's development build ships
@@ -41,7 +55,7 @@ const [, , , , rendererResult] = await Promise.all([
   // somebody's evidence, and `NODE_ENV` is what React switches on. `legalComments: "none"` keeps the
   // licence banners out of the one file the CSP allows to run. `rendererBuildOptions` is the exact
   // same object the import-boundary test builds with, so the two can never drift apart.
-  build({...rendererBuildOptions, entryPoints: [join(app, "src/renderer/main.tsx")], outfile: join(out, "renderer/main.js"), metafile: true}),
+  build({...rendererBuildOptions, define: {...rendererBuildOptions.define, ...define}, absWorkingDir: app, entryPoints: [join(app, "src/renderer/main.tsx")], outfile: join(out, "renderer/main.js"), metafile: true}),
   // The staged-window evaluation's reading half (pnpm --dir app reader:eval). Built exactly like
   // main.cjs -- CommonJS, electron external -- because it is an Electron main script too: the dev
   // bundle loads it INSTEAD of the app when CLAVE_DEV_ENTRY=reader-eval (scripts/dev-launcher.cjs),
@@ -68,6 +82,39 @@ const css = join(out, "renderer/main.css");
 if (!existsSync(css)) writeFileSync(css, "");
 cpSync(join(app, "src/standins/taxonomy.json"), join(out, "standins-taxonomy.json"));
 cpSync(whatLeaves, join(out, "WHAT-LEAVES.md"));
+// What this dist IS, for the staging step (which refuses a dist built for another flavour) and for
+// About. The version is the app's own from package.json; the build number is the UTC minute.
+const version = JSON.parse(readFileSync(join(app, "package.json"), "utf8")).version;
+writeFileSync(join(out, "build.json"), JSON.stringify(buildInfo({flavour, version, date: new Date()})) + "\n");
+// The release gate (design section 2): a release build carries no stand-in. Until sub-project D wires
+// the real client into app.ts, this refuses, which is the point: a release cannot be built by accident.
+if (flavour === "release") {
+  const standins = standinInputs(mainResult.metafile);
+  if (standins.length > 0) {
+    console.error("BUILD_FAILED STANDINS_IN_RELEASE", standins[0]);
+    process.exit(1);
+  }
+}
+// The packages esbuild inlined into the SHIPPED bundles, with their licence, for the licence file
+// the staging step generates (they are not in the staged node_modules). Consumed at staging, never
+// shipped. A bundled package without a package.json in reach is a build failure: a licence nobody
+// can name is not shipped.
+const bundled = [];
+for (const input of nodeModulesInputs([mainResult.metafile, preloadResult.metafile, hostResult.metafile, rendererResult.metafile])) {
+  const dir = packageDirOf(join(app, input), existsSync);
+  if (dir === null) { console.error("BUILD_FAILED BUNDLED_PACKAGE_UNRESOLVED", input); process.exit(1); }
+  const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+  if (typeof pkg.name !== "string" || typeof pkg.version !== "string") { console.error("BUILD_FAILED BUNDLED_PACKAGE_UNNAMED", input); process.exit(1); }
+  const licence = licenceField(pkg);
+  const licenceFile = pickLicenceFile(readdirSync(dir).filter((f) => /^(licen[cs]e|copying)/i.test(f)).sort(), chosenLicence(licence));
+  bundled.push({
+    name: pkg.name, version: pkg.version,
+    licence,
+    source: typeof pkg.homepage === "string" ? pkg.homepage : typeof pkg.repository === "string" ? pkg.repository : typeof pkg.repository?.url === "string" ? pkg.repository.url : undefined,
+    licenceText: licenceFile ? readFileSync(join(dir, licenceFile), "utf8") : null
+  });
+}
+writeFileSync(join(out, "bundled-packages.json"), JSON.stringify(uniquePackages(bundled), null, 2) + "\n");
 
 // The native reader helper, when it has been built (pnpm --dir app build:native). dist/ was wiped a
 // few lines up, so it is copied in on every build; without it the app still builds, and asking for the
@@ -89,6 +136,7 @@ if (process.argv.includes("--preview")) {
   mkdirSync(previewOut, {recursive: true});
   const previewResult = await build({
     ...rendererBuildOptions,
+    define: {...rendererBuildOptions.define, ...define},
     entryPoints: [join(app, "src/renderer/dev/preview.tsx")],
     outfile: join(previewOut, "preview.js"),
     minify: false,
@@ -130,4 +178,4 @@ if (process.argv.includes("--preview")) {
   console.log("built", previewOut);
 }
 
-console.log("built", out);
+console.log("built", out, "flavour", flavour);

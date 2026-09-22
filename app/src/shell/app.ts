@@ -1,9 +1,12 @@
 import {execFile, spawn} from "node:child_process";
-import {randomUUID} from "node:crypto";
+import {randomBytes, randomUUID} from "node:crypto";
 import {existsSync, readFileSync} from "node:fs";
 import {dirname, join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, safeStorage, session, shell, Tray, utilityProcess} from "electron";
+import {createGoogleSignIn} from "../main/account/googleSignIn";
+import {createHttpApi} from "../main/api/httpApi";
+import {OAUTH_TIMEOUT_MS} from "../main/constants";
 import {createEngine, type Engine, type EngineStatus} from "../main/engine";
 import {createIpcRouter} from "../main/ipcRouter";
 import {createModelClient} from "../main/model/client";
@@ -16,6 +19,7 @@ import {createNodeFs} from "../main/storage/nodeFs";
 import {dataPaths} from "../main/storage/paths";
 import {COPY} from "../renderer/copy";
 import {INVOKE_CHANNELS, eventName, invokeName} from "../shared/ipc";
+import {FLAVOUR} from "../shared/flavour";
 import {createDevReader, windowsFromFixture} from "../standins/devReader";
 import {createReadyDownloader} from "../standins/readyDownloader";
 import {createSmokeCipher} from "../standins/smokeCipher";
@@ -23,14 +27,24 @@ import {createStubApi} from "../standins/stubApi";
 import {createPowerSource, createSafeStorageCipher, createUtilityHostLink} from "./adapters";
 import {watchBattery} from "./batteryLevel";
 import {devEnv} from "./devEnv";
+import {resolveApiUrl} from "./apiUrl";
+import {launchMode} from "./launchMode";
+import {createLoopbackListener} from "./loopbackListener";
+import {openLicences} from "./licences";
 import {background, startFailureCode} from "./lifecycle";
+import {isTranslocatedPath} from "./translocation";
 import {chooseHelperPath, createRealReader} from "./realReader";
 import {runSmoke} from "./smoke";
 import {trayKey, trayState} from "./trayState";
 import {samePage} from "./trust";
 
 const APP_NAME = COPY.appName;                        // also a built-in exclusion of the core: the app never reads itself
-const WINDOW = {width: 420, height: 600};
+/**
+ * The size of the PAGE, not of the window frame: `.window` in styles.css is laid out at exactly
+ * 420 x 600, and without `useContentSize` Electron takes these as the outer size, so the macOS
+ * title bar came out of the page and the bottom 28px — the tab row — were cut off.
+ */
+const WINDOW = {width: 420, height: 600, useContentSize: true};
 /** No `persist:` prefix, so the window's session lives in memory only and leaves nothing behind. */
 const WINDOW_PARTITION = "clave-window";
 const DEFAULT_MODEL_URL = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf";
@@ -41,18 +55,18 @@ const RENDERER_URL = pathToFileURL(here("renderer/index.html")).toString();
 /**
  * Every environment switch is a development switch and `devEnv` hands back nothing at all once the
  * app is packaged, so a packaged build cannot be talked into stand-ins, a scripted model, a
- * different data folder or a different model URL by whoever started it.
- *
- * Until sub-projects C (native reader) and D (clave-back) exist the app can only run with the
- * stand-ins. `createEngine` refuses stand-ins when `production` as well.
+ * different data folder or a different model URL by whoever started it. What a packaged build runs
+ * with is decided by the flavour baked in at build time (`launchMode`): `internal` keeps the stub
+ * backend beside the real reader and model; `release` runs the real clave-back client, reader and
+ * model. `createEngine` refuses stand-ins when `production` as well.
  */
 const DEV = !app.isPackaged;
 const ENV = devEnv(process.env, !DEV);
-const STANDINS = ENV.CLAVE_STANDINS === "1";
-const SCRIPTED_MODEL = STANDINS && ENV.CLAVE_SCRIPTED_MODEL === "1";
-const SMOKE = STANDINS && ENV.CLAVE_SMOKE === "1";
-/** The native reader (sub-project C) beside the stand-in backend. Never in the unattended smoke run, which must not need a permission. */
-const REAL_READER = STANDINS && !SMOKE && ENV.CLAVE_REAL_READER === "1";
+const MODE = launchMode({packaged: app.isPackaged, flavour: FLAVOUR, env: ENV});
+const STANDINS = MODE.standIns;
+const SCRIPTED_MODEL = MODE.scriptedModel;
+const SMOKE = MODE.smoke;
+const REAL_READER = MODE.realReader;
 const MODEL_URL = ENV.CLAVE_MODEL_URL ?? DEFAULT_MODEL_URL;
 
 /** How long `before-quit` waits for the engine to save its pool before quitting anyway. */
@@ -97,15 +111,17 @@ function notify(body: string, options: {silent?: boolean; onClick?: () => void} 
   note.show();
 }
 
-function standIns(dataDir: string): {reader: Reader; api: ClaveApi} {
-  const fixturesDir = ENV.CLAVE_FIXTURES ?? join(app.getAppPath(), "..", "eval", "fixtures");
-  const fixture = JSON.parse(readFileSync(join(fixturesDir, "01-work-english.json"), "utf8")) as unknown;
+function standInApi(dataDir: string): ClaveApi {
   const taxonomy = parseTaxonomy(JSON.parse(readFileSync(here("standins-taxonomy.json"), "utf8")));
   if (!taxonomy) throw new Error("STANDIN_TAXONOMY_INVALID");
-  return {
-    reader: createDevReader(windowsFromFixture(fixture), 1_500),
-    api: createStubApi({fs: createNodeFs(), uploadsPath: join(dataDir, "stub-uploads.jsonl"), taxonomy, now: () => Date.now()})
-  };
+  return createStubApi({fs: createNodeFs(), uploadsPath: join(dataDir, "stub-uploads.jsonl"), taxonomy, now: () => Date.now()});
+}
+
+/** The scripted screens of the dev reader. Only ever read when the dev reader is the reader: no fake screen text is opened, let alone shipped, beside the real one. */
+function standInReader(): Reader {
+  const fixturesDir = ENV.CLAVE_FIXTURES ?? join(app.getAppPath(), "..", "eval", "fixtures");
+  const fixture = JSON.parse(readFileSync(join(fixturesDir, "01-work-english.json"), "utf8")) as unknown;
+  return createDevReader(windowsFromFixture(fixture), 1_500);
 }
 
 let sessionHardened = false;
@@ -188,17 +204,25 @@ async function start(): Promise<void> {
   if (process.platform === "darwin") app.dock?.hide();
   const dataDir = ENV.CLAVE_DATA_DIR ?? app.getPath("userData");
   const paths = dataPaths(dataDir);
-  if (!STANDINS) throw new Error("NO_READER_YET");      // sub-projects C and D replace the stand-ins; nothing else can run
-
-  const stand = standIns(dataDir);
-  const api = stand.api;
+  // Which clave-back, decided before anything is built: a switch that is set but wrong refuses the launch rather than picking a server.
+  const apiUrl = resolveApiUrl({packaged: app.isPackaged, switchValue: ENV.CLAVE_API_URL});
+  if (!apiUrl.ok) throw new Error(apiUrl.code);
+  if (MODE.refuse) throw new Error(MODE.refuse);         // the reader sub-project decides when a build without stand-ins may run
+  const api: ClaveApi = MODE.realApi ? createHttpApi({baseUrl: apiUrl.url}) : standInApi(dataDir);
+  // The browser sign-in exists only where there is a real backend to send the browser to.
+  const googleSignIn = MODE.realApi
+    ? createGoogleSignIn({baseUrl: apiUrl.url, listen: createLoopbackListener, openExternal: (url) => shell.openExternal(url), randomState: () => randomBytes(32).toString("base64url"), timeoutMs: OAUTH_TIMEOUT_MS})
+    : undefined;
   // The helper is a plain child of this process, inside the same bundle: that is what lets the Screen
   // Recording grant given to the app reach it (phase 0, P1).
   const real = REAL_READER
     ? createRealReader({helperPath: chooseHelperPath([join(dirname(process.execPath), "clave-reader"), here("native/clave-reader")], existsSync), exists: existsSync, spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"]}), now: () => Date.now()})
     : null;
-  if (real) void stand.reader.dispose();
-  const reader: Reader = real ? real.reader : stand.reader;
+  const reader: Reader = real ? real.reader : standInReader();
+  // Running from macOS's quarantine copy: a grant given here would belong to a path nobody can find
+  // again, so the window says "move to Applications" and the permission request is a no-op until
+  // the app has been moved and reopened. The engine keeps its reader; only the renderer's ask is cut.
+  const translocated = isTranslocatedPath(process.execPath);
   const downloader: Downloader = SCRIPTED_MODEL
     ? createReadyDownloader()
     : createDownloader({http: createNodeHttp(), disk: createNodeDownloadDisk(), dir: paths.modelDir, spec: {...PINNED_MODEL, url: MODEL_URL}});
@@ -233,17 +257,19 @@ async function start(): Promise<void> {
     // An unattended smoke run has nobody at the keyboard; without this the loop would (correctly) treat the user as away and read nothing.
     idleSeconds: () => (SMOKE ? 0 : powerMonitor.getSystemIdleTime()),
     now: () => Date.now(), local: systemLocalTime, newId: () => randomUUID(),
-    appVersion: app.getVersion(), modelSha256: SCRIPTED_MODEL ? "scripted" : PINNED_MODEL.sha256, production: app.isPackaged,
+    appVersion: app.getVersion(), modelSha256: SCRIPTED_MODEL ? "scripted" : PINNED_MODEL.sha256, production: MODE.production,
     notifyReview: (count) => notify(COPY.notify.review(count), {onClick: showWindow}),
-    notifyCaptureResumed: () => notify(COPY.notify.resumed, {silent: true})
+    notifyCaptureResumed: () => notify(COPY.notify.resumed, {silent: true}),
+    ...(googleSignIn ? {googleSignIn} : {})
   });
   const current = engine;
   real?.attach(current);
 
   const router = createIpcRouter({
-    engine: current, downloader, reader, recentApp: () => recentApp,
-    appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS},
+    engine: current, downloader, reader: translocated ? {requestPermission: async () => undefined} : reader, recentApp: () => recentApp,
+    appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS, translocated, googleSignIn: MODE.realApi},
     openWhatLeaves: async () => { await shell.openPath(here("WHAT-LEAVES.md")); },
+    openLicences: () => openLicences({path: here("THIRD-PARTY-LICENSES.txt"), exists: existsSync, open: async (path) => { await shell.openPath(path); }}),
     restartApp: () => { app.relaunch(); app.quit(); }
   });
   for (const channel of INVOKE_CHANNELS) {

@@ -13,7 +13,7 @@ function setup(cipherAvailable = true) {
   const fs = createMemFs();
   const api = createFakeApi(() => now);
   const make = () => createSessionStore({api, fs, cipher: createFakeCipher(cipherAvailable), path: PATH, now: () => now});
-  return {fs, api, make, advance: (ms: number) => { now += ms; }};
+  return {fs, api, make, advance: (ms: number) => { now += ms; }, now: () => now};
 }
 
 describe("session", () => {
@@ -28,6 +28,85 @@ describe("session", () => {
     expect(seen).toHaveBeenCalledWith(true);
     expect(fs.everything()).not.toContain("token-1");
     expect(fs.everything()).not.toContain("correct");
+  });
+
+  it("signInWith stores a session obtained elsewhere exactly like a password sign-in, names included", async () => {
+    const {api, make, fs} = setup();
+    const store = make();
+    const result = await store.signInWith(() => api.exchangeOAuthAttempt("attempt-ok"));
+    expect(result).toEqual({ok: true});
+    expect(store.userId()).toBe("user:google");
+    expect(store.names()).toEqual(["Sardor Astanov"]);
+    expect(api.calls).toEqual(["exchangeOAuthAttempt", "profile"]);
+    expect(fs.everything()).not.toContain("attempt-ok");
+    await store.signOut();
+    expect(await store.signInWith(() => api.exchangeOAuthAttempt("attempt-bad"))).toEqual({ok: false, code: "UNAUTHORISED"});
+    expect(store.current()).toBeNull();
+    expect(store.names()).toEqual([]);
+  });
+
+  it("renews a running session before its token runs out: a day early for a long token, halfway for a short one, once", async () => {
+    const {api, make, advance} = setup();
+    const store = make();
+    await store.signIn("sardor", "correct");                 // the fake's tokens live 7 days
+    await store.refreshIfDue();
+    advance(5 * 24 * 60 * 60_000);
+    await store.refreshIfDue();
+    expect(api.calls.filter((c) => c === "refresh")).toEqual([]);
+    advance(24 * 60 * 60_000 + 1);                            // less than a day left, and less than half of 7 days
+    await store.refreshIfDue();
+    expect(api.calls.filter((c) => c === "refresh")).toEqual(["refresh"]);
+    await store.refreshIfDue();                               // the new token is fresh again
+    expect(api.calls.filter((c) => c === "refresh")).toEqual(["refresh"]);
+
+    // A short-lived token: half its life, not "a day before".
+    const short = setup();
+    const realSignIn = short.api.signIn.bind(short.api);
+    short.api.signIn = async (id, pw) => ({...(await realSignIn(id, pw)), expiresAt: short.now() + 60 * 60_000});
+    const realRefresh = short.api.refresh.bind(short.api);
+    short.api.refresh = async (old) => ({...(await realRefresh(old)), expiresAt: short.now() + 60 * 60_000});
+    const s = short.make();
+    await s.signIn("sardor", "correct");
+    short.advance(29 * 60_000);
+    await s.refreshIfDue();
+    expect(short.api.calls.filter((c) => c === "refresh")).toEqual([]);
+    short.advance(2 * 60_000);
+    await s.refreshIfDue();
+    expect(short.api.calls.filter((c) => c === "refresh")).toEqual(["refresh"]);
+    expect(s.current()!.expiresAt).toBe(short.now() + 60 * 60_000);
+  });
+
+  it("a renewal that fails keeps the session and is not retried for a quarter of an hour; a firm refusal signs out", async () => {
+    const {api, make, advance} = setup();
+    const store = make();
+    await store.signIn("sardor", "correct");
+    advance(7 * 24 * 60 * 60_000 - 60_000);
+    api.failWith = "OFFLINE";
+    await store.refreshIfDue();
+    await store.refreshIfDue();
+    expect(api.calls.filter((c) => c === "refresh")).toEqual(["refresh"]);
+    expect(store.current()).not.toBeNull();
+    advance(15 * 60_000 + 1);
+    api.failWith = "RATE_LIMITED";
+    await store.refreshIfDue();
+    expect(api.calls.filter((c) => c === "refresh")).toEqual(["refresh", "refresh"]);
+    expect(store.current()).not.toBeNull();
+    advance(15 * 60_000 + 1);
+    api.failWith = "UNAUTHORISED";
+    await store.refreshIfDue();
+    expect(store.current()).toBeNull();
+  });
+
+  it("a session read back from disk is renewed a day early, its lifetime being unknown", async () => {
+    const {api, make, advance} = setup();
+    await make().signIn("sardor", "correct");
+    advance(60_000);
+    const store = make();
+    await store.restore();                                   // fresh: no refresh at launch
+    expect(api.calls.filter((c) => c === "refresh")).toEqual([]);
+    advance(7 * 24 * 60 * 60_000 - 2 * 60_000);
+    await store.refreshIfDue();
+    expect(api.calls.filter((c) => c === "refresh")).toEqual(["refresh"]);
   });
 
   it("reports bad credentials and being offline with fixed codes", async () => {
@@ -124,6 +203,46 @@ describe("session", () => {
     expect(await store.signIn("sardor", "correct")).toEqual({ok: false, code: "STORAGE_WRITE_FAILED"});
     expect(store.current()).toBeNull();
     expect(api.calls).toEqual(["signIn", "profile"]);
+  });
+
+  it("at launch, only a firm refusal signs the user out: RATE_LIMITED and BAD_RESPONSE keep the session, UNAUTHORISED and BAD_CREDENTIALS end it", async () => {
+    for (const [code, keeps] of [["RATE_LIMITED", true], ["BAD_RESPONSE", true], ["OFFLINE", true], ["SERVER", true], ["UNAUTHORISED", false], ["BAD_CREDENTIALS", false]] as const) {
+      const {api, make, advance} = setup();
+      await make().signIn("sardor", "correct");
+      advance(7 * 24 * 60 * 60_000 - 60_000);            // inside the refresh window
+      api.failWith = code;
+      const store = make();
+      await store.restore();
+      expect(store.current() !== null, code).toBe(keeps);
+    }
+  });
+
+  it("a refresh that resolves while a password sign-in is still waiting for the server is never persisted", async () => {
+    const {api, make, advance} = setup();
+    const store = make();
+    await store.signIn("sardor", "correct");
+    advance(7 * 24 * 60 * 60_000 - 60_000);
+    // Hold both calls open, then let the old identity's refresh land first.
+    let releaseRefresh: (() => void) | null = null;
+    let releaseSignIn: (() => void) | null = null;
+    const realRefresh = api.refresh.bind(api);
+    const realSignIn = api.signIn.bind(api);
+    api.refresh = async (old) => { await new Promise<void>((r) => { releaseRefresh = r; }); return realRefresh(old); };
+    api.signIn = async (id, pw) => { await new Promise<void>((r) => { releaseSignIn = r; }); return realSignIn(id, pw); };
+    const call = store.withSession(async () => { throw new ApiError("UNAUTHORISED"); });
+    await tick();
+    const signingIn = store.signIn("bea", "correct");
+    await tick();
+    releaseRefresh!();
+    await tick();
+    releaseSignIn!();
+    await expect(call).rejects.toMatchObject({code: "UNAUTHORISED"});
+    expect(await signingIn).toEqual({ok: true});
+    expect(store.userId()).toBe("user:bea");
+    // The token on disk is bea's, not a refreshed token for sardor.
+    const reloaded = make();
+    await reloaded.restore();
+    expect(reloaded.userId()).toBe("user:bea");
   });
 
   it("keeps a signed-in session past full expiry when the refresh is refused with OFFLINE or SERVER", async () => {

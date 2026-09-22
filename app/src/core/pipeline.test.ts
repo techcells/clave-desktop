@@ -47,6 +47,16 @@ function setup(script: FakeScript, config: PipelineConfig = CONFIG) {
 const long = (tag: string) => `${tag} investigated the failing integration and documented the outcome for the team. `.repeat(8);
 
 describe("pipeline", () => {
+  it("never captures the app's own window under this build's name (selfApp), nor under the release name", () => {
+    const {pipeline} = setup([], {...CONFIG, selfApp: "Clave Agent Internal"});
+    pipeline.signal("captureOn");
+    expect(pipeline.mayCapture({app: "Clave Agent Internal", title: "Review"})).toEqual({allow: false, reason: "excludedApp"});
+    expect(pipeline.mayCapture({app: "Clave Agent", title: "Review"})).toEqual({allow: false, reason: "excludedApp"});
+    const {pipeline: plain} = setup([]);
+    plain.signal("captureOn");
+    expect(plain.mayCapture({app: "Clave Agent Internal", title: "Review"})).toEqual({allow: true});
+  });
+
   it("is off until switched on, and stops when the screen locks", () => {
     const {pipeline} = setup([]);
     expect(pipeline.mayCapture(SLACK)).toEqual({allow: false, reason: "captureOff"});

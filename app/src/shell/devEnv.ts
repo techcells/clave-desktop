@@ -7,7 +7,8 @@
  * Electron.
  */
 export const DEV_SWITCHES = [
-  "CLAVE_STANDINS", "CLAVE_SCRIPTED_MODEL", "CLAVE_SMOKE", "CLAVE_DATA_DIR", "CLAVE_FIXTURES", "CLAVE_MODEL_URL", "CLAVE_REAL_READER"
+  "CLAVE_STANDINS", "CLAVE_SCRIPTED_MODEL", "CLAVE_SMOKE", "CLAVE_DATA_DIR", "CLAVE_FIXTURES", "CLAVE_MODEL_URL", "CLAVE_REAL_READER",
+  "CLAVE_API_URL", "CLAVE_REAL_API"
 ] as const;
 export type DevSwitch = typeof DEV_SWITCHES[number];
 export type DevEnv = Readonly<Record<DevSwitch, string | undefined>>;

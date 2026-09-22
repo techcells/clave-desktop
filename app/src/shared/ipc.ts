@@ -23,7 +23,9 @@ export const NOTHING_READ_WHY = ["notAllowed", "noWindow", "other"] as const;
 
 /** What the renderer may know about the settings. Internal bookkeeping (owner, self-test key, prompt day) stays in main. */
 export interface UserSettings { exclusions: string[]; excludedSites: string[]; reviewTime: string; captureOn: boolean; onboardingStep: number }
-export interface AppInfo { version: string; modelSha256: string; modelSizeBytes: number; standIns: boolean }
+/** `translocated`: macOS is running the app from its quarantine copy; the window shows "move to Applications" and nothing asks for Screen Recording. Optional so a build without the check reads as not translocated. */
+export type OpenLicencesResult = "opened" | "LICENCES_MISSING";
+export interface AppInfo { version: string; modelSha256: string; modelSizeBytes: number; standIns: boolean; translocated?: boolean; googleSignIn?: boolean }
 
 export interface ClaveBridge {
   status(): Promise<EngineStatus>;
@@ -33,6 +35,9 @@ export interface ClaveBridge {
   setCapture(on: boolean): Promise<{ok: true} | {ok: false; blockers: Blocker[]}>;
   pauseForAnHour(): Promise<void>;
   signIn(identifier: string, password: string): Promise<SignInResult>;
+  /** Opens the user's browser for a Google sign-in and answers when it is over, one way or the other. */
+  signInWithGoogle(): Promise<SignInResult>;
+  cancelGoogleSignIn(): Promise<void>;
   signOut(): Promise<void>;
   settings(): Promise<UserSettings>;
   settingsOpened(): Promise<void>;
@@ -49,6 +54,8 @@ export interface ClaveBridge {
   recentApp(): Promise<string | null>;
   appInfo(): Promise<AppInfo>;
   openWhatLeaves(): Promise<void>;
+  /** Opens the bundled THIRD-PARTY-LICENSES.txt. The file exists only in packaged builds: a fixed code, never a path, says when it is not there. */
+  openLicences(): Promise<OpenLicencesResult>;
   restartApp(): Promise<void>;
   onStatus(cb: (status: EngineStatus) => void): () => void;
   onDownload(cb: (state: DownloadState) => void): () => void;
@@ -56,9 +63,9 @@ export interface ClaveBridge {
 
 /** Every request channel, in one list. The router refuses anything else. */
 export const INVOKE_CHANNELS = [
-  "status", "review", "approve", "reject", "setCapture", "pauseForAnHour", "signIn", "signOut", "settings", "settingsOpened",
+  "status", "review", "approve", "reject", "setCapture", "pauseForAnHour", "signIn", "signInWithGoogle", "cancelGoogleSignIn", "signOut", "settings", "settingsOpened",
   "updateSettings", "selfTest", "recheckPermission", "requestPermission", "retry", "deleteAllData", "downloadState",
-  "downloadStart", "downloadPause", "recentApp", "appInfo", "openWhatLeaves", "restartApp"
+  "downloadStart", "downloadPause", "recentApp", "appInfo", "openWhatLeaves", "openLicences", "restartApp"
 ] as const;
 export type InvokeChannel = typeof INVOKE_CHANNELS[number];
 

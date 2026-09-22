@@ -27,8 +27,13 @@ describe("background work", () => {
 });
 
 describe("the launch failure code", () => {
-  it("passes through each of the three reasons launch can fail", () => {
+  it("passes through each of the reasons launch can fail", () => {
     for (const code of START_FAILURES) expect(startFailureCode(new Error(code)), code).toBe(code);
+    // The literal names, so that removing one from the list is caught here.
+    for (const code of ["NO_READER_YET", "STANDIN_TAXONOMY_INVALID", "STANDIN_IN_PRODUCTION", "READER_HELPER_MISSING", "BAD_API_URL"]) {
+      expect(START_FAILURES, code).toContain(code);
+      expect(startFailureCode(new Error(code))).toBe(code);
+    }
   });
 
   it("reads a code property as well as a message", () => {
@@ -41,7 +46,7 @@ describe("the launch failure code", () => {
     }
   });
 
-  it("only ever answers one of the four allowed words", () => {
+  it("only ever answers one of the allowed words", () => {
     expect([...START_FAILURES, "UNKNOWN"]).toContain(startFailureCode(new Error("whatever")));
   });
 });

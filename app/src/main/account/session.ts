@@ -1,9 +1,10 @@
-import {SESSION_REFRESH_BEFORE_MS} from "../constants";
+import {SESSION_REFRESH_BEFORE_MS, SESSION_REFRESH_RETRY_MS} from "../constants";
 import {ApiError, apiCodeOf, parseSession, type ApiErrorCode, type ClaveApi, type Session} from "../ports/claveApi";
 import type {Cipher, FileSystem, Now} from "../ports/system";
 import {createJsonFile, StorageError} from "../storage/jsonFile";
 
-export type SignInResult = {ok: true} | {ok: false; code: ApiErrorCode | "STORAGE_UNAVAILABLE" | "STORAGE_WRITE_FAILED"};
+/** `OAUTH_TIMEOUT`: the browser never came back (or the user cancelled); `OAUTH_BROWSER`: the browser could not be opened at all. */
+export type SignInResult = {ok: true} | {ok: false; code: ApiErrorCode | "STORAGE_UNAVAILABLE" | "STORAGE_WRITE_FAILED" | "OAUTH_TIMEOUT" | "OAUTH_BROWSER"};
 
 export interface SessionStore {
   current(): Session | null;
@@ -11,8 +12,17 @@ export interface SessionStore {
   /** The user's own names, which the guard forbids in statements. Empty until known. */
   names(): string[];
   signIn(identifier: string, password: string): Promise<SignInResult>;
+  /** The same as `signIn`, for a session obtained some other way (a browser sign-in's attempt exchange). */
+  signInWith(getSession: () => Promise<Session>): Promise<SignInResult>;
   /** On launch: loads the stored token, refreshes it when it is near expiry. A refused refresh signs out. */
   restore(): Promise<void>;
+  /**
+   * On the engine's minute tick: renews the token before it expires, the way `restore` does at launch,
+   * so an app that runs for longer than a token lives is not signed out. Due when less than a day is
+   * left and, once the token's lifetime is known, less than half of it; one failed attempt per quarter
+   * hour at most. Cheap when nothing is due.
+   */
+  refreshIfDue(): Promise<void>;
   signOut(): Promise<void>;
   /**
    * Runs an API call with the session. On UNAUTHORISED it refreshes once and tries again; if that is
@@ -55,6 +65,10 @@ export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher:
     catch { /* still pending: the next restore/signIn/signOut tries again */ }
   }
 
+  // How long the current token was good for when it was obtained: null for a token read back from disk.
+  let lifetimeMs: number | null = null;
+  let lastRenewalFailedAt: number | null = null;
+
   async function set(next: Stored | null): Promise<void> {
     const was = stored !== null;
     if (next) {
@@ -62,6 +76,8 @@ export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher:
       // sync and tells no listener anything happened.
       await file.save(next);
       stored = next;
+      lifetimeMs = Math.max(0, next.session.expiresAt - now());
+      lastRenewalFailedAt = null;
       removalPending = false;          // the file on disk is this session's again
       if (!was) emit();
       return;
@@ -100,14 +116,15 @@ export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher:
     current: () => stored?.session ?? null,
     userId: () => stored?.session.userId ?? null,
     names: () => stored?.names ?? [],
-    async signIn(identifier, password) {
+    signIn: (identifier, password) => store.signInWith(() => api.signIn(identifier, password)),
+    async signInWith(getSession) {
       // FIRST, before any await: from here on, a refresh that was already in flight belongs to an
       // identity this store has left behind, even if it resolves inside signIn's own save window.
       generation += 1;
       if (!deps.cipher.available()) return {ok: false, code: "STORAGE_UNAVAILABLE"};
       await removeStored();
       try {
-        const session = await api.signIn(identifier, password);
+        const session = await getSession();
         const {names} = await api.profile(session);
         await set({session, names});
         return {ok: true};
@@ -136,15 +153,32 @@ export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher:
         // the current one: whoever bumped the generation already decided what is signed in. `emit`
         // reads that decision, so saying it again is always the truth and never a stale value.
         if (error instanceof StaleRefresh) { emit(); return; }
-        // Offline, a server hiccup, or a failed local save of the refreshed token: the previous
-        // session stays in memory regardless of its own expiry. Only a firm refusal from the server
-        // (UNAUTHORISED/BAD_CREDENTIALS) signs the user out.
+        // Offline, a server hiccup, a garbled or rate-limited answer, or a failed local save of the
+        // refreshed token: the previous session stays in memory regardless of its own expiry. Only
+        // a firm refusal from the server (UNAUTHORISED/BAD_CREDENTIALS) signs the user out.
         const code = apiCodeOf(error);
-        if (code === "OFFLINE" || code === "SERVER") emit();
-        else await set(null);
+        if (code === "UNAUTHORISED" || code === "BAD_CREDENTIALS") await set(null);
+        else emit();
       }
     },
     async signOut() { generation += 1; await removeStored(); await set(null); },
+    async refreshIfDue() {
+      if (!stored) return;
+      const remaining = stored.session.expiresAt - now();
+      const due = remaining < SESSION_REFRESH_BEFORE_MS && (lifetimeMs === null || remaining < lifetimeMs / 2);
+      if (!due) return;
+      if (lastRenewalFailedAt !== null && now() - lastRenewalFailedAt < SESSION_REFRESH_RETRY_MS) return;
+      const gen = generation;
+      try { await refreshShared(); }
+      catch (error) {
+        if (error instanceof StaleRefresh || generation !== gen) return;
+        // The same rule as at launch: only a firm refusal signs the user out; anything else keeps the
+        // session and is tried again later.
+        const code = apiCodeOf(error);
+        if (code === "UNAUTHORISED" || code === "BAD_CREDENTIALS") { await set(null); return; }
+        lastRenewalFailedAt = now();
+      }
+    },
     async withSession(call) {
       if (!stored) throw new ApiError("UNAUTHORISED");
       // Captured BEFORE the call, never in the catch: the identity this call was made for. A sign-in

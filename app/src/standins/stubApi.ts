@@ -17,6 +17,10 @@ export function createStubApi(deps: {fs: FileSystem; uploadsPath: string; taxono
       if (!identifier.trim() || !password) throw new ApiError("BAD_CREDENTIALS");
       return session(`stub:${identifier.trim().toLowerCase()}`);
     },
+    async exchangeOAuthAttempt(attemptId) {
+      if (!attemptId.trim()) throw new ApiError("UNAUTHORISED");
+      return session("stub:google");
+    },
     async refresh(old) { return session(old.userId); },
     async profile(s) { return {names: [s.userId.replace(/^stub:/, "")]}; },
     async taxonomy(_s, knownVersion) { return knownVersion === taxonomy.version ? "unchanged" : taxonomy; },

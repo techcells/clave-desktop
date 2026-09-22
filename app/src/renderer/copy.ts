@@ -1,4 +1,5 @@
 import type {Blocker, DownloadState, NothingReadWhy, SettingsProblem, SignInResult} from "../shared/ipc";
+import {APP_NAME} from "../shared/flavour";
 
 /**
  * Every sentence the user can read lives in this file, so the pitch is identical everywhere and
@@ -65,6 +66,9 @@ export const SIGN_IN_PROBLEMS: Record<SignInProblem, string> = {
   OFFLINE: "There is no connection to Clave right now.",
   SERVER: "Clave did not answer. Try again in a moment.",
   BAD_RESPONSE: "Clave's answer could not be read.",
+  RATE_LIMITED: "Clave asked the app to slow down. Try again in a few minutes.",
+  OAUTH_TIMEOUT: "The browser sign-in did not finish. Try again.",
+  OAUTH_BROWSER: "Your browser could not be opened for the sign-in.",
   STORAGE_UNAVAILABLE: "Your sign-in could not be saved on this machine.",
   STORAGE_WRITE_FAILED: "Your sign-in could not be saved on this machine."
 };
@@ -92,7 +96,7 @@ export const SETTINGS_PROBLEMS: Record<SettingsProblem, string> = {
 };
 
 export const COPY = {
-  appName: "Clave Agent",
+  appName: APP_NAME,                                   // per build flavour: scripts/flavour.mjs, src/shared/flavour.ts
   nav: {label: "Sections", home: "Home", review: "Review", settings: "Settings"},
   common: {
     continue: "Continue", back: "Back", add: "Add", save: "Save", cancel: "Cancel", tryAgain: "Try again",
@@ -170,7 +174,10 @@ export const COPY = {
     reviewTime: "When should I show you today's evidence?", done: "All set. Reading stays off until you switch it on.",
     step: (n: number, of: number) => `Step ${n} of ${of}`,
     pitch: "How this works",
-    signIn: "Sign in", identifier: "Email", password: "Password",
+    signIn: "Sign in", identifier: "Email or handle", password: "Password",
+    /** The browser path. The app never sees the Google password: the browser and Clave handle it, and the app gets a one-time code back. */
+    signInWithGoogle: "Sign in with Google", or: "or",
+    waitingForBrowser: "Finish signing in through your browser. This window will update by itself.",
     model: "The model",
     modelSize: (gigabytes: string) => `The model is ${gigabytes} GB. It is downloaded once and then runs on this machine, with or without a connection.`,
     progress: "Download progress", pause: "Pause", resume: "Resume", verifying: "Checking the file that arrived",

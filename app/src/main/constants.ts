@@ -57,9 +57,17 @@ export const LOW_BATTERY_LEVEL = 0.2;
 
 // Account
 export const SESSION_REFRESH_BEFORE_MS = 24 * 60 * 60_000;
+/** After a failed token renewal while running, do not ask again before this much time has passed. */
+export const SESSION_REFRESH_RETRY_MS = 15 * 60_000;
 export const TAXONOMY_REFRESH_MS = 24 * 60 * 60_000;
 /** After a failed taxonomy refresh, do not ask again before this much time has passed, unless forced. */
 export const TAXONOMY_RETRY_MS = 15 * 60_000;
+
+/** One clave-back call; the taxonomy is a few hundred kilobytes and gets its own. A silent server must never hang a launch. */
+export const API_TIMEOUT_MS = 15_000;
+export const API_TAXONOMY_TIMEOUT_MS = 60_000;
+/** How long a browser sign-in may take before the app stops listening for it. */
+export const OAUTH_TIMEOUT_MS = 5 * 60_000;
 
 // Upload
 export const UPLOAD_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000] as const;

@@ -82,6 +82,12 @@ describe("stub api", () => {
     expect(JSON.parse(fs.text("/d/stub-uploads.jsonl") as string)).toEqual({receivedAt: 50, userId: "stub:sardor", item});
   });
 
+  it("exchanges any browser attempt id for a stub session, and refuses an empty one", async () => {
+    const api = createStubApi({fs: createMemFs(), uploadsPath: "/x", taxonomy: taxonomy!, now: () => 50});
+    expect(await api.exchangeOAuthAttempt("anything")).toMatchObject({userId: "stub:google", expiresAt: 50 + 7 * 24 * 60 * 60_000});
+    await expect(api.exchangeOAuthAttempt("  ")).rejects.toMatchObject({code: "UNAUTHORISED"});
+  });
+
   it("marks both stand-ins so a production build can refuse them", () => {
     expect(isStandIn(createStubApi({fs: createMemFs(), uploadsPath: "/x", taxonomy: taxonomy!, now: () => 0}))).toBe(true);
     expect(isStandIn(createDevReader([], 1_000))).toBe(true);

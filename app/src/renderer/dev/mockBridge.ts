@@ -207,6 +207,8 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
       pushStatus({blockers: without("SIGNED_OUT")});
       return {ok: true};
     },
+    signInWithGoogle: async (): Promise<SignInResult> => { pushStatus({blockers: without("SIGNED_OUT")}); return {ok: true}; },
+    cancelGoogleSignIn: async () => undefined,
     signOut: async () => { pushStatus({capture: "off", blockers: [...engine.blockers, "SIGNED_OUT"]}); },
     settings: async () => stored,
     settingsOpened: async () => { pushStatus({blockers: without("SETTINGS_NEED_REVIEW")}); },
@@ -263,6 +265,7 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
     recentApp: async () => "Figma",
     appInfo: async () => APP_INFO,
     openWhatLeaves: async () => undefined,
+    openLicences: async () => "LICENCES_MISSING",
     restartApp: async () => {
       permission = "granted";
       pushStatus({blockers: without("NO_PERMISSION", "PERMISSION_NEEDS_RESTART")});

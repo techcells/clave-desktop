@@ -5,6 +5,7 @@ node_modules/
 app/dist/
 app/dist-preview/
 app/native/reader/target/
+app/out/
 
 # Generated at run time
 app/reader-eval/out/

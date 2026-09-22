@@ -17,6 +17,23 @@ describe("before capture", () => {
     expect(x.before({app: "Clave Agent", title: "Review"})).toBe("excludedApp");
   });
 
+  it("denies the app's own name for THIS build, whatever it is called, and keeps the release name too", () => {
+    const x = createExclusions({exclusions: [], excludedSites: [], selfApp: "Clave Agent Internal"});
+    expect(x.before({app: "Clave Agent Internal", title: "Review"})).toBe("excludedApp");
+    expect(x.before({app: "  clave agent internal ", title: "Review"})).toBe("excludedApp");
+    expect(x.before({app: "Clave Agent", title: "Review"})).toBe("excludedApp");
+    expect(x.before({app: "Clave Agent Internals", title: "Doc"})).toBeNull();
+  });
+
+  it("without selfApp, or with a malformed one, only the built-in release name is denied", () => {
+    expect(createExclusions({exclusions: [], excludedSites: []}).before({app: "Clave Agent Internal", title: "Review"})).toBeNull();
+    for (const selfApp of ["", "   ", 7, null, ["Clave Agent Internal"]]) {
+      const x = createExclusions({exclusions: [], excludedSites: [], selfApp});
+      expect(x.before({app: "Clave Agent Internal", title: "Review"}), String(selfApp)).toBeNull();
+      expect(x.before({app: "Clave Agent", title: "Review"})).toBe("excludedApp");
+    }
+  });
+
   it("excludes personal messengers and password managers by default", () => {
     const x = defaults();
     for (const app of ["Telegram", "WhatsApp", "Messages", "Signal", "1Password", "Bitwarden", "Keychain Access"]) {

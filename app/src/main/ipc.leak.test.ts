@@ -39,7 +39,7 @@ describe("LEAK TEST (IPC): everything that can cross to the renderer", () => {
     const router = createIpcRouter({
       engine, reader, downloader: {state: h.downloader.state, onChange: h.downloader.onChange, start: async () => undefined, pause: () => undefined},
       recentApp: () => null, appInfo: {version: "1.0.0", modelSha256: "sha", modelSizeBytes: 1, standIns: true},
-      openWhatLeaves: async () => undefined, restartApp: () => undefined
+      openWhatLeaves: async () => undefined, openLicences: async () => "LICENCES_MISSING", restartApp: () => undefined
     });
     const crossed: unknown[] = [];
     router.subscribe((channel, payload) => crossed.push([channel, payload]));

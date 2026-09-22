@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {ApiError, apiCodeOf, parseSession, parseTaxonomy} from "./claveApi";
+import {ApiError, apiCodeOf, parseNames, parseSession, parseSubmit, parseTaxonomy} from "./claveApi";
 import {FAILURE_DETAILS, parseFrontWindow, parseHelperReadResult, parsePermission, parseReadResult, WIRE_DETAILS} from "./reader";
 
 /** One string holding a name, an address and a password: what must never become a log key. */
@@ -183,6 +183,20 @@ describe("api port", () => {
     expect(apiCodeOf(error)).toBe("OFFLINE");
     expect(apiCodeOf(new Error("the server said: secret text"))).toBe("SERVER");
   });
+  it("validates the names and the upload answer, with `rejected` optional", () => {
+    expect(parseNames({names: ["Sardor", "Astanov"]})).toEqual({names: ["Sardor", "Astanov"]});
+    expect(parseNames({names: "Sardor"})).toBeNull();
+    expect(parseNames({})).toBeNull();
+    expect(parseSubmit({accepted: ["a"]})).toEqual({accepted: ["a"]});
+    expect(parseSubmit({accepted: ["a"], rejected: ["b"]})).toEqual({accepted: ["a"], rejected: ["b"]});
+    expect(parseSubmit({accepted: "a"})).toBeNull();
+    expect(parseSubmit({rejected: ["b"]})).toBeNull();
+    expect(parseSubmit({accepted: [1]})).toBeNull();
+    expect(parseSubmit({accepted: [], rejected: [2]})).toBeNull();
+    expect(parseNames({names: [1]})).toBeNull();
+    expect(parseNames({names: [null]})).toBeNull();
+  });
+
   it("validates sessions and taxonomies", () => {
     expect(parseSession({token: "t", expiresAt: 5, userId: "u"})).toEqual({token: "t", expiresAt: 5, userId: "u"});
     expect(parseSession({token: "", expiresAt: 5, userId: "u"})).toBeNull();

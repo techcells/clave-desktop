@@ -34,6 +34,11 @@ export function createFakeApi(now: () => number): FakeApi {
       if (password !== "correct") throw new ApiError("BAD_CREDENTIALS");
       return session(api, `user:${identifier}`);
     },
+    async exchangeOAuthAttempt(attemptId) {
+      api.calls.push("exchangeOAuthAttempt"); fail(api);
+      if (attemptId !== "attempt-ok") throw new ApiError("UNAUTHORISED");
+      return session(api, "user:google");
+    },
     async refresh(old) { api.calls.push("refresh"); fail(api); return session(api, old.userId); },
     async profile() { api.calls.push("profile"); fail(api); return {names: api.names}; },
     async taxonomy(_session, knownVersion) {

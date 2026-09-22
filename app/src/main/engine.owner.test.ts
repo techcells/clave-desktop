@@ -415,4 +415,99 @@ describe("engine: a discarded outbox is said out loud", () => {
     expect(h.api.submitted).toEqual([]);
     await engine.quit();
   });
+
+  it("logs UPLOAD_REJECTED with the count when the server refuses an approved statement for good, and never shows it as sent", async () => {
+    const h = createHarness();
+    const engine = await ready(h);
+    h.client.script.push(GATE_YES, {evidence: [{target_id: "pg", statement: "Traced a slow report to a missing index and rebuilt it without blocking writes on a busy table."}]});
+    await engine.setCapture(true);
+    h.reader.front = {app: "Code", title: "report.sql"};
+    h.reader.text = "I traced the slow report to the orders query. Postgres fell back to a sequential scan, so I added the missing index concurrently and checked the plan again. ".repeat(4);
+    await vi.advanceTimersByTimeAsync(PIPELINE_TICK_MS);
+    engine.system("locked");
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 2 * PIPELINE_TICK_MS);
+    engine.system("unlocked");
+    await vi.advanceTimersByTimeAsync(PIPELINE_TICK_MS);
+    h.api.submitEvidence = async (_s, items) => ({accepted: [], rejected: items.map((i) => i.clientItemId)});
+    expect(await engine.approve(engine.review().pending[0]!.id)).toBe(true);
+    await vi.advanceTimersByTimeAsync(PIPELINE_TICK_MS);
+    expect(logCodes(h)).toContain("UPLOAD_REJECTED");
+    expect((h.fs.text("/data/app.log") ?? "")).toContain('"code":"UPLOAD_REJECTED","counts":{"count":1}');
+    expect(engine.review().sent).toEqual([]);
+    expect(engine.review().waitingUpload).toEqual([]);
+    expect(h.fs.text("/data/app.log")).not.toContain("Traced a slow report");
+    await engine.quit();
+  });
+
+  it("signs in through the browser: the exchange, the names, the skill list and the log codes, never the attempt id", async () => {
+    const h = createHarness();
+    let started = 0;
+    const engine = await h.launch({googleSignIn: {
+      start: async (exchange) => { started += 1; return exchange("attempt-ok"); },
+      cancel: () => undefined
+    }});
+    expect(await engine.signInWithGoogle()).toEqual({ok: true});
+    expect(started).toBe(1);
+    expect(h.api.calls).toEqual(["exchangeOAuthAttempt", "profile", "taxonomy"]);
+    expect(engine.status().blockers).not.toContain("SIGNED_OUT");
+    expect(engine.status().blockers).not.toContain("NO_TAXONOMY");
+    expect(logCodes(h)).toEqual(expect.arrayContaining(["SIGN_IN_GOOGLE_STARTED", "SIGN_IN_GOOGLE_FINISHED"]));
+    expect(h.fs.everything()).not.toContain("attempt-ok");
+    await engine.quit();
+  });
+
+  it("a refused browser sign-in leaves the user signed out and says so in the log's count", async () => {
+    const h = createHarness();
+    const engine = await h.launch({googleSignIn: {start: async (exchange) => exchange("attempt-bad"), cancel: () => undefined}});
+    expect(await engine.signInWithGoogle()).toEqual({ok: false, code: "UNAUTHORISED"});
+    expect(engine.status().blockers).toContain("SIGNED_OUT");
+    expect(h.fs.text("/data/app.log")).toContain('"code":"SIGN_IN_GOOGLE_FINISHED","counts":{"failures":1}');
+    await engine.quit();
+  });
+
+  it("without a browser sign-in in the build, asking for one answers OAUTH_BROWSER and cancelling is harmless", async () => {
+    const h = createHarness();
+    const engine = await h.launch();
+    expect(await engine.signInWithGoogle()).toEqual({ok: false, code: "OAUTH_BROWSER"});
+    engine.cancelGoogleSignIn();
+    expect(h.api.calls).toEqual([]);
+    await engine.quit();
+  });
+
+  it("cancel reaches the sign-in in flight", async () => {
+    const h = createHarness();
+    let cancelled = 0;
+    const engine = await h.launch({googleSignIn: {start: async () => ({ok: false, code: "OAUTH_TIMEOUT"}), cancel: () => { cancelled += 1; }}});
+    expect(await engine.signInWithGoogle()).toEqual({ok: false, code: "OAUTH_TIMEOUT"});
+    engine.cancelGoogleSignIn();
+    expect(cancelled).toBe(1);
+    await engine.quit();
+  });
+
+  it("quitting cancels a browser sign-in in flight, and a sign-in landing after quit runs none of the after-steps", async () => {
+    const h = createHarness();
+    let release: ((r: {ok: true}) => void) | null = null;
+    let cancelled = 0;
+    const engine = await h.launch({googleSignIn: {
+      start: async (exchange) => { await new Promise<{ok: true}>((r) => { release = r; }); return exchange("attempt-ok"); },
+      cancel: () => { cancelled += 1; }
+    }});
+    const pending = engine.signInWithGoogle();
+    await vi.advanceTimersByTimeAsync(0);
+    await engine.quit();
+    expect(cancelled).toBe(1);
+    release!({ok: true});
+    expect(await pending).toEqual({ok: true});
+    expect(h.api.calls).not.toContain("taxonomy");
+  });
+
+  it("renews the token on the minute tick while the app runs, so a long day never ends signed out", async () => {
+    const h = createHarness();
+    const engine = await ready(h);
+    expect(h.api.calls.filter((c) => c === "refresh")).toEqual([]);
+    await vi.advanceTimersByTimeAsync(6 * 24 * 60 * 60_000 + 2 * 60_000);
+    expect(h.api.calls.filter((c) => c === "refresh")).toEqual(["refresh"]);
+    expect(engine.status().blockers).not.toContain("SIGNED_OUT");
+    await engine.quit();
+  });
 });

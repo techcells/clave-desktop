@@ -13,7 +13,8 @@ async function setup() {
     engine, reader: {requestPermission: async () => { calls.push("requestPermission"); }},
     downloader: {state: h.downloader.state, onChange: h.downloader.onChange, start: async () => { calls.push("start"); }, pause: () => { calls.push("pause"); }},
     recentApp: () => "Figma", appInfo: {version: "1.0.0", modelSha256: "sha", modelSizeBytes: 5, standIns: true},
-    openWhatLeaves: async () => { calls.push("openWhatLeaves"); }, restartApp: () => { calls.push("restartApp"); }
+    openWhatLeaves: async () => { calls.push("openWhatLeaves"); }, openLicences: async () => { calls.push("openLicences"); return "LICENCES_MISSING"; },
+    restartApp: () => { calls.push("restartApp"); }
   });
   return {h, engine, router, calls};
 }
@@ -69,8 +70,8 @@ describe("ipc router", () => {
     expect(await router.handle("recentApp", [])).toBe("Figma");
     expect(await router.handle("appInfo", [])).toMatchObject({version: "1.0.0", standIns: true});
     await router.handle("requestPermission", []); await router.handle("downloadStart", []); await router.handle("downloadPause", []);
-    await router.handle("openWhatLeaves", []); await router.handle("restartApp", []);
-    expect(calls).toEqual(["requestPermission", "start", "pause", "openWhatLeaves", "restartApp"]);
+    await router.handle("openWhatLeaves", []); expect(await router.handle("openLicences", [])).toBe("LICENCES_MISSING"); await router.handle("restartApp", []);
+    expect(calls).toEqual(["requestPermission", "start", "pause", "openWhatLeaves", "openLicences", "restartApp"]);
     await engine.quit();
   });
 
@@ -106,7 +107,7 @@ describe("ipc router", () => {
       engine, reader: {requestPermission: async () => undefined},
       downloader: {state: h.downloader.state, onChange: h.downloader.onChange, start: () => Promise.reject(new Error("no network")), pause: () => undefined},
       recentApp: () => null, appInfo: {version: "1.0.0", modelSha256: "sha", modelSizeBytes: 5, standIns: true},
-      openWhatLeaves: async () => undefined, restartApp: () => undefined
+      openWhatLeaves: async () => undefined, openLicences: async () => "opened", restartApp: () => undefined
     });
     const unhandled: unknown[] = [];
     const watch = (reason: unknown) => { unhandled.push(reason); };

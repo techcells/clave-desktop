@@ -275,6 +275,7 @@ body {
 .meta { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.02em; color: var(--ink-3); }
 
 .note { font-size: 12.5px; line-height: 1.5; color: var(--ink-3); margin: 10px 0 0; }
+.actions-or > span { font-size: 12.5px; color: var(--ink-3); }
 
 /* The reading column's vertical rhythm: one rule, so no screen has to invent its own spacing. A
    label that follows something is the start of a new group and gets the bigger gap. */

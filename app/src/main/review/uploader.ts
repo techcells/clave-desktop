@@ -40,6 +40,8 @@ const parse = (value: unknown): Stored | null => {
 
 export function createUploader(deps: {
   api: ClaveApi; session: SessionStore; sentLog: SentLog; fs: FileSystem; cipher: Cipher; path: string; now: Now; onUnreadable?: () => void;
+  /** Called with how many items the server refused for good in one send; they leave the outbox and are never in the sent log. */
+  onRejected?: (count: number) => void;
 }): Uploader {
   const {api, session, sentLog, now} = deps;
   const file = createJsonFile<Stored>({fs: deps.fs, path: deps.path, parse, cipher: deps.cipher, ...(deps.onUnreadable ? {onUnreadable: deps.onUnreadable} : {})});
@@ -67,15 +69,21 @@ export function createUploader(deps: {
       // because a sign-in can land at either await.
       const owner = stored.ownerUserId ?? userId;
       const batch = [...stored.items];
-      const {accepted} = await session.withSession((s) => {
+      const {accepted, rejected = []} = await session.withSession((s) => {
         if (session.userId() !== owner) throw new ApiError("UNAUTHORISED");
         return api.submitEvidence(s, batch);
       });
       // Somebody else is signed in now: whatever the server said, these are not theirs to have sent.
       // The items stay in the outbox for their owner — re-sending is safe, `clientItemId` de-dupes.
       if (session.userId() !== owner) throw new ApiError("UNAUTHORISED");
-      const done = new Set(accepted);
-      const sent = batch.filter((item) => done.has(item.clientItemId));
+      // Accepted items are done and go to the sent log. Rejected items are done too — the server
+      // refused them for good and would again — but they never left, so they are not "sent"; an id
+      // the server named in both lists is held, and held wins. Anything in neither list is retried.
+      const held = new Set(accepted);
+      const refused = new Set(rejected.filter((id) => !held.has(id)));
+      const done = new Set([...held, ...refused]);
+      const sent = batch.filter((item) => held.has(item.clientItemId));
+      const rejectedCount = batch.filter((item) => refused.has(item.clientItemId)).length;
       // The sent log is the record that these left the machine. Write it FIRST: if it fails, the
       // items stay in the outbox (re-sending is safe, `clientItemId` de-dupes on the server) instead
       // of being dropped from the outbox while never having been logged as sent.
@@ -86,6 +94,8 @@ export function createUploader(deps: {
       await file.save(next);
       stored = next;
       failures = 0; notBefore = 0;
+      // Outside the guard's concern: the send is done and saved, and a listener that throws must not turn it into a failed send.
+      if (rejectedCount > 0) { try { deps.onRejected?.(rejectedCount); } catch { /* the count is a courtesy */ } }
       return stored.items.length === 0 ? "sent" : "waiting";
     } catch (error) {
       const delay = UPLOAD_BACKOFF_MS[Math.min(failures, UPLOAD_BACKOFF_MS.length - 1)] as number;

@@ -1,5 +1,7 @@
 import {createPipeline} from "../core/index";
+import {APP_NAME} from "../shared/flavour";
 import type {PendingStatement, Pipeline, PipelineConfig} from "../core/types";
+import type {GoogleSignIn} from "./account/googleSignIn";
 import {createSessionStore, type SignInResult} from "./account/session";
 import {createTaxonomyCache} from "./account/taxonomy";
 import {createCaptureLoop, type BarrenCounts, type CycleOutcome, type FailureTallyKey} from "./capture/loop";
@@ -118,6 +120,8 @@ export interface EngineDeps {
   notifyReview: (count: number) => void;
   /** Shown once at launch when capture resumed by itself. */
   notifyCaptureResumed: () => void;
+  /** A browser sign-in, when the build has one; without it `signInWithGoogle` answers OAUTH_BROWSER. */
+  googleSignIn?: GoogleSignIn;
 }
 
 export interface Engine {
@@ -126,6 +130,9 @@ export interface Engine {
   setCapture(on: boolean): Promise<{ok: true} | {ok: false; blockers: Blocker[]}>;
   pauseForAnHour(): Promise<void>;
   signIn(identifier: string, password: string): Promise<SignInResult>;
+  /** Sends the user's browser to Google through clave-back and signs in with what comes back. */
+  signInWithGoogle(): Promise<SignInResult>;
+  cancelGoogleSignIn(): void;
   signOut(): Promise<void>;
   review(): ReviewView;
   approve(id: string): Promise<boolean>;
@@ -181,7 +188,11 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
   const session = createSessionStore({api, fs, cipher, path: paths.session, now, onUnreadable: unreadable("SESSION_FILE_UNREADABLE")});
   const taxonomy = createTaxonomyCache({api, session, fs, path: paths.taxonomy, now});
   const sentLog = createSentLog({fs, path: paths.sentLog});
-  const uploader = createUploader({api, session, sentLog, fs, cipher, path: paths.outbox, now, onUnreadable: unreadable("OUTBOX_FILE_UNREADABLE")});
+  const uploader = createUploader({
+    api, session, sentLog, fs, cipher, path: paths.outbox, now, onUnreadable: unreadable("OUTBOX_FILE_UNREADABLE"),
+    // A count and nothing else: which statements were refused is not a thing the log may hold.
+    onRejected: (count) => { background(log.event("UPLOAD_REJECTED", {count})); }
+  });
   const pool = createPoolStore({fs, cipher, path: paths.pool, onUnreadable: unreadable("POOL_FILE_UNREADABLE")});
 
   let permission: Permission = "unknown";
@@ -220,7 +231,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
   const config = (): PipelineConfig => {
     const t = taxonomy.current();
     const s = settings.get();
-    return {exclusions: s.exclusions, excludedSites: s.excludedSites, taxonomyVersion: t?.version ?? "none", skills: t?.skills ?? [], competencies: t?.competencies ?? [], userNames: session.names()};
+    return {exclusions: s.exclusions, excludedSites: s.excludedSites, selfApp: APP_NAME, taxonomyVersion: t?.version ?? "none", skills: t?.skills ?? [], competencies: t?.competencies ?? [], userNames: session.names()};
   };
   const newPipeline = (): Pipeline => createPipeline(config(), {model, clock: {now, dayKey: (ms) => deps.local(ms).day}, newId: deps.newId});
   let pipeline = newPipeline();
@@ -435,6 +446,28 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
     return saving;
   }
 
+  /** Whatever signed the user in, the same things follow: the pool, the outbox and the settings become this account's, and the skill list is fetched. */
+  async function signedInBy(attempt: () => Promise<SignInResult>): Promise<SignInResult> {
+    if (stopped) return {ok: false, code: "UNAUTHORISED"};
+    const result = await attempt();
+    // A sign-in that lands after quit (a browser wait can take minutes) is stored, but nothing else
+    // may run on a stopped engine: the pool and the outbox are quit's to save.
+    if (stopped) return result;
+    if (result.ok) {
+      const userId = session.userId() as string;
+      if (poolOwner !== null && poolOwner !== userId) await startFreshFor(userId);
+      poolOwner = userId;
+      await adoptOutbox();
+      await ensureSettingsOwner();
+      await taxonomy.refresh(true);
+      pipeline.configure(config());
+      background(savePool());
+      background(flushUploads(true));
+    }
+    await evaluate();
+    return result;
+  }
+
   /**
    * Every automatic upload attempt (the tick's and the one after a sign-in). A flush that failed on
    * the DISK — the outbox or the sent log would not be written — is the same problem a failed pool
@@ -542,7 +575,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       background(refreshPermission());
       emit();
     }, PIPELINE_TICK_MS);
-    schedulerTimer = setInterval(() => { background(checkReview()); }, SCHEDULER_CHECK_MS);
+    schedulerTimer = setInterval(() => { background(checkReview()); background(session.refreshIfDue()); }, SCHEDULER_CHECK_MS);
   }
   function stopTimers(): void {
     if (tickTimer !== null) clearInterval(tickTimer);
@@ -613,23 +646,17 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       resumeTimer = setTimeout(() => { resumeAt = null; resumeTimer = null; background(evaluate()); }, PAUSE_FOR_MS);
       await evaluate();
     },
-    async signIn(identifier, password) {
+    signIn: (identifier, password) => signedInBy(() => session.signIn(identifier, password)),
+    async signInWithGoogle() {
       if (stopped) return {ok: false, code: "UNAUTHORISED"};
-      const result = await session.signIn(identifier, password);
-      if (result.ok) {
-        const userId = session.userId() as string;
-        if (poolOwner !== null && poolOwner !== userId) await startFreshFor(userId);
-        poolOwner = userId;
-        await adoptOutbox();
-        await ensureSettingsOwner();
-        await taxonomy.refresh(true);
-        pipeline.configure(config());
-        background(savePool());
-        background(flushUploads(true));
-      }
-      await evaluate();
+      if (!deps.googleSignIn) return {ok: false, code: "OAUTH_BROWSER"};
+      const browser = deps.googleSignIn;
+      background(log.event("SIGN_IN_GOOGLE_STARTED"));
+      const result = await signedInBy(() => browser.start((attemptId) => session.signInWith(() => api.exchangeOAuthAttempt(attemptId))));
+      background(log.event("SIGN_IN_GOOGLE_FINISHED", {failures: result.ok ? 0 : 1}));
       return result;
     },
+    cancelGoogleSignIn() { deps.googleSignIn?.cancel(); },
     async signOut() { await session.signOut(); await evaluate(); },
     review() {
       const t = taxonomy.current();
@@ -774,6 +801,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       await evaluate();
     },
     async quit() {
+      deps.googleSignIn?.cancel();                          // a browser wait must not outlive the app
       if (stopped) return;
       stopped = true;
       stopTimers();

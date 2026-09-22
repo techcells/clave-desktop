@@ -53,7 +53,7 @@ export function createPipeline(initial: PipelineConfig, ports: Ports): Pipeline 
   let paused = false;
 
   function configure(config: PipelineConfig): ConfigResult {
-    const exclusions = createExclusions({exclusions: config?.exclusions, excludedSites: config?.excludedSites});
+    const exclusions = createExclusions({exclusions: config?.exclusions, excludedSites: config?.excludedSites, selfApp: config?.selfApp});
     const taxonomy = taxonomyShape.safeParse(config);
     const problems = [...exclusions.problems, ...(taxonomy.success ? [] : ["skills, competencies, user names or taxonomy version are malformed"])];
     if (problems.length > 0) { active = null; return {ok: false, problems}; }

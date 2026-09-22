@@ -40,6 +40,52 @@ describe("uploader", () => {
     expect(sentLog.list("user:sardor")).toEqual([{sentAt: now(), item: item("a"), ownerUserId: "user:sardor"}]);
   });
 
+  it("drops what the server refused for good, counts it, and never logs it as sent", async () => {
+    const {api, sentLog, make, now} = await setup();
+    const rejectedCounts: number[] = [];
+    const uploader = createUploader({api, session: (await setup()).session, sentLog, fs: createMemFs(), cipher: createFakeCipher(), path: "/d/outbox.bin", now, onRejected: (count) => rejectedCounts.push(count)});
+    api.submitEvidence = async (_s, items) => ({accepted: items.filter((i) => i.clientItemId === "a").map((i) => i.clientItemId), rejected: ["b", "a", "d", "never-sent"]});
+    await uploader.enqueue(item("a"));
+    await uploader.enqueue(item("b"));
+    await uploader.enqueue(item("c"));
+    await uploader.enqueue(item("d"));
+    // a: held (and named in both lists: held wins); b, d: refused for good; c: in neither list, so it waits.
+    expect(uploader.waiting()).toEqual([item("c")]);
+    expect(sentLog.list("user:sardor").map((entry) => entry.item.clientItemId)).toEqual(["a"]);
+    // One call per send, with the whole count: the four enqueues collapsed into two sends (the first, then one round for what joined it).
+    expect(rejectedCounts.reduce((sum, n) => sum + n, 0)).toBe(2);
+    expect(rejectedCounts.every((n) => n >= 1)).toBe(true);
+    expect(await uploader.flush(true)).toBe("waiting");
+    expect(uploader.waiting()).toEqual([item("c")]);
+  });
+
+  it("a refusal is counted only once the outbox save went through, and a listener that throws does not fail the send", async () => {
+    const {api, fs, session, sentLog, now} = await setup();
+    const counts: number[] = [];
+    const uploader = createUploader({api, session, sentLog, fs, cipher: createFakeCipher(), path: "/d/outbox.bin", now, onRejected: (count) => { counts.push(count); throw new Error("listener bug"); }});
+    api.failWith = "OFFLINE";
+    await uploader.enqueue(item("a"));                   // the send it triggers fails; the item waits
+    api.failWith = null;
+    api.submitEvidence = async () => ({accepted: [], rejected: ["a"]});
+    fs.failWrites = true;
+    expect(await uploader.flush(true)).toBe("STORAGE_WRITE_FAILED");
+    expect(counts).toEqual([]);                          // nothing counted: the outbox still holds it
+    expect(uploader.waiting()).toEqual([item("a")]);
+    fs.failWrites = false;
+    expect(await uploader.flush(true)).toBe("sent");     // the throwing listener changed nothing
+    expect(counts).toEqual([1]);
+    expect(uploader.waiting()).toEqual([]);
+  });
+
+  it("an answer without a rejected list behaves exactly as before", async () => {
+    const {api, sentLog, make} = await setup();
+    const uploader = make();
+    api.submitEvidence = async (_s, items) => ({accepted: items.map((i) => i.clientItemId)});
+    await uploader.enqueue(item("a"));
+    expect(uploader.waiting()).toEqual([]);
+    expect(sentLog.list("user:sardor")).toHaveLength(1);
+  });
+
   it("logs a sent batch under the batch's owner, never under whoever is signed in now", async () => {
     const {api, session, sentLog, make} = await setup(false);
     const uploader = make();

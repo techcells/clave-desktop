@@ -1,6 +1,6 @@
 import {z} from "zod";
 import {RULE_MAX_LENGTH} from "../core/constants";
-import {EVENT_CHANNELS, INVOKE_CHANNELS, type AppInfo, type EventChannel, type InvokeChannel, type UserSettings} from "../shared/ipc";
+import {EVENT_CHANNELS, INVOKE_CHANNELS, type AppInfo, type EventChannel, type InvokeChannel, type OpenLicencesResult, type UserSettings} from "../shared/ipc";
 import {IPC_MAX_ID_CHARS, IPC_MAX_IDENTIFIER_CHARS, IPC_MAX_ONBOARDING_STEP, IPC_MAX_PASSWORD_CHARS, IPC_MAX_RULES} from "./constants";
 import type {Engine} from "./engine";
 import type {Downloader} from "./model/download";
@@ -18,6 +18,7 @@ export interface IpcRouterDeps {
   recentApp: () => string | null;
   appInfo: AppInfo;
   openWhatLeaves: () => Promise<void>;
+  openLicences: () => Promise<OpenLicencesResult>;
   restartApp: () => void;
 }
 
@@ -40,9 +41,9 @@ const patch = z.object({
 }).strict();
 
 const ARGS = {
-  status: none, review: none, pauseForAnHour: none, signOut: none, settings: none, settingsOpened: none, selfTest: none,
+  status: none, review: none, pauseForAnHour: none, signInWithGoogle: none, cancelGoogleSignIn: none, signOut: none, settings: none, settingsOpened: none, selfTest: none,
   recheckPermission: none, requestPermission: none, downloadState: none, downloadStart: none, downloadPause: none,
-  recentApp: none, appInfo: none, openWhatLeaves: none, restartApp: none,
+  recentApp: none, appInfo: none, openWhatLeaves: none, openLicences: none, restartApp: none,
   approve: z.tuple([z.string().min(1).max(IPC_MAX_ID_CHARS)]), reject: z.tuple([z.string().min(1).max(IPC_MAX_ID_CHARS)]),
   setCapture: z.tuple([z.boolean()]),
   signIn: z.tuple([z.string().min(1).max(IPC_MAX_IDENTIFIER_CHARS), z.string().min(1).max(IPC_MAX_PASSWORD_CHARS)]),
@@ -74,6 +75,8 @@ export function createIpcRouter(deps: IpcRouterDeps): IpcRouter {
       case "setCapture": return engine.setCapture(a[0] as boolean);
       case "pauseForAnHour": return engine.pauseForAnHour();
       case "signIn": return engine.signIn(a[0] as string, a[1] as string);
+      case "signInWithGoogle": return engine.signInWithGoogle();
+      case "cancelGoogleSignIn": engine.cancelGoogleSignIn(); return undefined;
       case "signOut": return engine.signOut();
       case "settings": return userSettings();
       case "settingsOpened": engine.settingsOpened(); return undefined;
@@ -92,6 +95,7 @@ export function createIpcRouter(deps: IpcRouterDeps): IpcRouter {
       case "recentApp": return deps.recentApp();
       case "appInfo": return deps.appInfo;
       case "openWhatLeaves": return deps.openWhatLeaves();
+      case "openLicences": return deps.openLicences();
       case "restartApp": deps.restartApp(); return undefined;
     }
   }
