@@ -126,8 +126,8 @@ export function createHttpApi(deps: HttpApiDeps): ClaveApi {
       const body = who.includes("@") ? {email: who, password} : {handle: who, password};
       return sessionOrBad(await call("POST", "/api/security/login", {body, route: "login"}));
     },
-    async exchangeOAuthAttempt(attemptId) {
-      const data = await call("GET", `/api/security/oAuthAttempt/${encoded(attemptId, "UNAUTHORISED")}`);
+    async exchangeOAuthAttempt(attemptId, codeVerifier) {
+      const data = await call("GET", `/api/security/oAuthAttempt/${encoded(attemptId, "UNAUTHORISED")}?codeVerifier=${encoded(codeVerifier, "UNAUTHORISED")}`);
       const attempt = attemptShape.safeParse(data);
       if (!attempt.success) throw new ApiError("BAD_RESPONSE");
       // The server records a refused attempt (no account for that Google email, wrong provider) as a successful lookup of an unsuccessful attempt.

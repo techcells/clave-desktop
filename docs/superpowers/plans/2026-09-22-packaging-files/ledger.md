@@ -71,6 +71,12 @@ Design: docs/superpowers/specs/2026-09-22-packaging-design.md (DRAFT, awaiting a
 - 2026-09-22 (decision 7, model licence Apache-2.0 per the model card): "sure" = CONFIRMED; licences.fixed.json
   updated; a release build no longer refuses on MODEL_LICENCE_UNCONFIRMED.
 
+- 2026-09-22: "write in a markdown file a step by step, easy to understand, latest based on the changes how to do
+  Apple Developer Program, what I need to communicate to my boss about giving me necessary data" ->
+  docs/apple-developer-program.md (from Apple's current enrol / roles / certificate pages and the installed
+  notarytool 1.1.3 help; organisation enrolment, the boss checklist, Admin role, Developer ID certificate,
+  store-credentials with an API key or an app-specific password, the two names to hand over).
+
 ## Rulings made on the owner's behalf (with cost if wrong)
 
 - R1 (2026-09-22): no `git init`, commit or push by an agent even after his "let's push"; the folder had

@@ -30,6 +30,26 @@ describe("taxonomy cache", () => {
     expect(again.current()?.version).toBe("tax-1");
   });
 
+  it("a refresh already on its way answers a second caller too: one request, not two", async () => {
+    const {api, make} = await setup();
+    const cache = make();
+    const releases: Array<() => void> = [];
+    const realTaxonomy = api.taxonomy.bind(api);
+    api.taxonomy = async (s, known) => { await new Promise<void>((r) => { releases.push(r); }); return realTaxonomy(s, known); };
+    const forced = cache.refresh(true);
+    const ordinary = cache.refresh();
+    await Promise.resolve();
+    // Exactly one request went out; releasing every one there is keeps a wrong implementation from hanging the test.
+    expect(releases).toHaveLength(1);
+    for (const release of releases) release();
+    expect(await Promise.all([forced, ordinary])).toEqual(["updated", "updated"]);
+    expect(api.calls.filter((c) => c === "taxonomy")).toEqual(["taxonomy"]);
+    // Once it has landed, the next forced refresh is a new request.
+    api.taxonomy = realTaxonomy;
+    expect(await cache.refresh(true)).toBe("unchanged");
+    expect(api.calls.filter((c) => c === "taxonomy")).toEqual(["taxonomy", "taxonomy"]);
+  });
+
   it("asks at most once a day, and sends the known version", async () => {
     const {api, make, advance} = await setup();
     const cache = make();

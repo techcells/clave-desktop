@@ -30,17 +30,17 @@ export function createTaxonomyCache(deps: {api: ClaveApi; session: SessionStore;
   // network) stays down, but it must also never persist across a restart as if it were real data.
   let lastFailedAt: number | null = null;
   const listeners = new Set<(taxonomy: Taxonomy) => void>();
+  // A refresh already on its way answers every caller that arrives meanwhile: the sign-in's forced
+  // refresh and the tick's ordinary one used to go out as two requests for the same list.
+  let inFlight: Promise<"updated" | "unchanged" | "failed"> | null = null;
 
-  return {
-    current: () => stored?.taxonomy ?? null,
-    async load() {
-      stored = await file.load();
-      if (stored) for (const cb of listeners) cb(stored.taxonomy);
-    },
-    async refresh(force = false) {
-      if (!session.current()) return "skipped";
-      if (!force && stored && now() - stored.checkedAt < TAXONOMY_REFRESH_MS) return "skipped";
-      if (!force && lastFailedAt !== null && now() - lastFailedAt < TAXONOMY_RETRY_MS) return "failed";
+  async function fetchNow(): Promise<"updated" | "unchanged" | "failed"> {
+    if (inFlight) return inFlight;
+    inFlight = fetchOnce().finally(() => { inFlight = null; });
+    return inFlight;
+  }
+
+  async function fetchOnce(): Promise<"updated" | "unchanged" | "failed"> {
       try {
         const answer = await session.withSession((s) => api.taxonomy(s, stored?.taxonomy.version));
         if (answer === "unchanged") {
@@ -62,6 +62,19 @@ export function createTaxonomyCache(deps: {api: ClaveApi; session: SessionStore;
         lastFailedAt = now();
         return "failed";
       }
+  }
+
+  return {
+    current: () => stored?.taxonomy ?? null,
+    async load() {
+      stored = await file.load();
+      if (stored) for (const cb of listeners) cb(stored.taxonomy);
+    },
+    async refresh(force = false) {
+      if (!session.current()) return "skipped";
+      if (!force && stored && now() - stored.checkedAt < TAXONOMY_REFRESH_MS) return "skipped";
+      if (!force && lastFailedAt !== null && now() - lastFailedAt < TAXONOMY_RETRY_MS) return "failed";
+      return fetchNow();
     },
     async clear() { stored = null; await file.remove(); },
     onChange(cb) { listeners.add(cb); return () => { listeners.delete(cb); }; }

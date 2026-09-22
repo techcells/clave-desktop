@@ -17,8 +17,8 @@ export function createStubApi(deps: {fs: FileSystem; uploadsPath: string; taxono
       if (!identifier.trim() || !password) throw new ApiError("BAD_CREDENTIALS");
       return session(`stub:${identifier.trim().toLowerCase()}`);
     },
-    async exchangeOAuthAttempt(attemptId) {
-      if (!attemptId.trim()) throw new ApiError("UNAUTHORISED");
+    async exchangeOAuthAttempt(attemptId, codeVerifier) {
+      if (!attemptId.trim() || !codeVerifier.trim()) throw new ApiError("UNAUTHORISED");
       return session("stub:google");
     },
     async refresh(old) { return session(old.userId); },

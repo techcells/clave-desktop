@@ -1,3 +1,4 @@
+import {createHash, randomBytes} from "node:crypto";
 import type {SignInResult} from "./session";
 
 /**
@@ -27,15 +28,25 @@ export interface GoogleSignInDeps {
 }
 
 export interface GoogleSignIn {
-  /** Starts a sign-in; a sign-in already in flight is cancelled first. `exchange` is the caller's own way of turning the attempt id into a signed-in session. */
-  start(exchange: (attemptId: string) => Promise<SignInResult>): Promise<SignInResult>;
+  /**
+   * Starts a sign-in; a sign-in already in flight is cancelled first. `exchange` is the caller's own way
+   * of turning the attempt id into a signed-in session; it is handed the PKCE verifier whose challenge
+   * went out with the login URL, so only this run can spend the attempt (RFC 7636).
+   */
+  start(exchange: (attemptId: string, codeVerifier: string) => Promise<SignInResult>): Promise<SignInResult>;
   cancel(): void;
 }
 
+/** RFC 7636, S256: 32 random bytes as base64url make a 43-character verifier; the challenge is its SHA-256, base64url. */
+export function pkcePair(random: (bytes: number) => Buffer = randomBytes): {verifier: string; challenge: string} {
+  const verifier = random(32).toString("base64url");
+  return {verifier, challenge: createHash("sha256").update(verifier, "ascii").digest("base64url")};
+}
+
 /** The address the browser is sent to. Exported so the URL shape is pinned by a test, not by reading the code. */
-export function googleLoginUrl(baseUrl: string, port: number, state: string): string {
+export function googleLoginUrl(baseUrl: string, port: number, state: string, codeChallenge: string): string {
   const returnUrl = `http://127.0.0.1:${port}/callback?state=${encodeURIComponent(state)}`;
-  return `${baseUrl}/api/security/login/google?returnUrl=${encodeURIComponent(returnUrl)}`;
+  return `${baseUrl}/api/security/login/google?returnUrl=${encodeURIComponent(returnUrl)}&codeChallenge=${encodeURIComponent(codeChallenge)}`;
 }
 
 export function createGoogleSignIn(deps: GoogleSignInDeps): GoogleSignIn {
@@ -49,6 +60,7 @@ export function createGoogleSignIn(deps: GoogleSignInDeps): GoogleSignIn {
       const mine = () => { run.cancelled = true; run.wake?.(); };
       cancelCurrent = mine;
       const state = deps.randomState();
+      const pkce = pkcePair();
       let listener: LoopbackListener;
       // A loopback port that cannot be bound is answered as a code, like everything else here: the socket error names an address.
       try { listener = await deps.listen(state); } catch { if (cancelCurrent === mine) cancelCurrent = null; return {ok: false, code: "OAUTH_BROWSER"}; }
@@ -60,11 +72,11 @@ export function createGoogleSignIn(deps: GoogleSignInDeps): GoogleSignIn {
       });
       try {
         if (run.cancelled) return {ok: false, code: "OAUTH_TIMEOUT"};   // cancelled while the port was being bound: no browser
-        try { await deps.openExternal(googleLoginUrl(deps.baseUrl, listener.port, state)); }
+        try { await deps.openExternal(googleLoginUrl(deps.baseUrl, listener.port, state, pkce.challenge)); }
         catch { return {ok: false, code: "OAUTH_BROWSER"}; }
         const outcome = await Promise.race([listener.callback(), gaveUp]);
         if (outcome === "timeout" || run.cancelled) return {ok: false, code: "OAUTH_TIMEOUT"};
-        return await exchange(outcome.attemptId);
+        return await exchange(outcome.attemptId, pkce.verifier);
       } finally {
         if (timer) clearTimeout(timer);
         // Only this run's own handle is cleared: a run started after this one has registered its own by now.

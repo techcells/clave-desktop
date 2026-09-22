@@ -23,8 +23,8 @@ export interface SubmitResult { accepted: string[]; rejected?: string[] }
 /** clave-back (sub-project D): `main/api/httpApi` in real builds, `stubApi` in stand-in modes. */
 export interface ClaveApi {
   signIn(identifier: string, password: string): Promise<Session>;
-  /** The second half of a browser sign-in: the one-time attempt id the server handed the app's listener. */
-  exchangeOAuthAttempt(attemptId: string): Promise<Session>;
+  /** The second half of a browser sign-in: the one-time attempt id the server handed the app's listener, and the PKCE verifier whose challenge started it. */
+  exchangeOAuthAttempt(attemptId: string, codeVerifier: string): Promise<Session>;
   refresh(session: Session): Promise<Session>;
   profile(session: Session): Promise<{names: string[]}>;
   taxonomy(session: Session, knownVersion?: string): Promise<Taxonomy | "unchanged">;

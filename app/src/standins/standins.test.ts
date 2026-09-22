@@ -84,8 +84,9 @@ describe("stub api", () => {
 
   it("exchanges any browser attempt id for a stub session, and refuses an empty one", async () => {
     const api = createStubApi({fs: createMemFs(), uploadsPath: "/x", taxonomy: taxonomy!, now: () => 50});
-    expect(await api.exchangeOAuthAttempt("anything")).toMatchObject({userId: "stub:google", expiresAt: 50 + 7 * 24 * 60 * 60_000});
-    await expect(api.exchangeOAuthAttempt("  ")).rejects.toMatchObject({code: "UNAUTHORISED"});
+    expect(await api.exchangeOAuthAttempt("anything", "verifier")).toMatchObject({userId: "stub:google", expiresAt: 50 + 7 * 24 * 60 * 60_000});
+    await expect(api.exchangeOAuthAttempt("  ", "verifier")).rejects.toMatchObject({code: "UNAUTHORISED"});
+    await expect(api.exchangeOAuthAttempt("anything", " ")).rejects.toMatchObject({code: "UNAUTHORISED"});
   });
 
   it("marks both stand-ins so a production build can refuse them", () => {

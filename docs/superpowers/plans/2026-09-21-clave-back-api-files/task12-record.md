@@ -35,3 +35,18 @@ Codes, counts and ids only. Never a statement's text beyond the fixture sentence
   Lesson recorded in the ledger: never point a write path at a database an older deployment reads.
 - Steps 8–10 (Google over HTTP, cancel, rate limit) NOT run: Google needs the dev deployment (or a
   Google client that allows localhost); the local app and API were stopped at 15:36.
+
+## Session 2 (2026-09-22, after the dev deployment of `f6989a3`)
+
+- Owner deployed dev; PKCE (app + backend, uncommitted) is built but NOT yet on dev, so the app's
+  `codeChallenge` / `codeVerifier` parameters are ignored by dev's older code — the handoff works
+  without proof of possession for this run, and gets it once the PKCE commit is deployed.
+- Step 8 setup: `pnpm --dir app start:api` against the default unpackaged base URL
+  `https://api.d.clave.co`, fresh throwaway data folder; the owner presses "Sign in with Google".
+- Step 8 PASS (dev deployment): first press cancelled by the owner on purpose (wrong Chrome profile)
+  → `SIGN_IN_GOOGLE_FINISHED {failures: 1}`; second press signed in → `{failures: 0}`, session stored,
+  taxonomy from dev (2906 / 25, `d679b5ba5687eb94`). Step 9 (cancel) thereby exercised: a cancelled
+  browser sign-in ends with the failure count and leaves the app signed out; the owner then simply
+  started again.
+- Step 10 (rate limit over HTTP) NOT run: the cap is a server constant that cannot be lowered on
+  dev; the path stays covered by unit tests on both sides (server refusal → RATE_LIMITED → backoff).

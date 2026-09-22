@@ -443,12 +443,13 @@ describe("engine: a discarded outbox is said out loud", () => {
     const h = createHarness();
     let started = 0;
     const engine = await h.launch({googleSignIn: {
-      start: async (exchange) => { started += 1; return exchange("attempt-ok"); },
+      start: async (exchange) => { started += 1; return exchange("attempt-ok", "the-verifier"); },
       cancel: () => undefined
     }});
     expect(await engine.signInWithGoogle()).toEqual({ok: true});
     expect(started).toBe(1);
     expect(h.api.calls).toEqual(["exchangeOAuthAttempt", "profile", "taxonomy"]);
+    expect(h.api.verifiers).toEqual(["the-verifier"]);
     expect(engine.status().blockers).not.toContain("SIGNED_OUT");
     expect(engine.status().blockers).not.toContain("NO_TAXONOMY");
     expect(logCodes(h)).toEqual(expect.arrayContaining(["SIGN_IN_GOOGLE_STARTED", "SIGN_IN_GOOGLE_FINISHED"]));
@@ -458,7 +459,7 @@ describe("engine: a discarded outbox is said out loud", () => {
 
   it("a refused browser sign-in leaves the user signed out and says so in the log's count", async () => {
     const h = createHarness();
-    const engine = await h.launch({googleSignIn: {start: async (exchange) => exchange("attempt-bad"), cancel: () => undefined}});
+    const engine = await h.launch({googleSignIn: {start: async (exchange) => exchange("attempt-bad", "the-verifier"), cancel: () => undefined}});
     expect(await engine.signInWithGoogle()).toEqual({ok: false, code: "UNAUTHORISED"});
     expect(engine.status().blockers).toContain("SIGNED_OUT");
     expect(h.fs.text("/data/app.log")).toContain('"code":"SIGN_IN_GOOGLE_FINISHED","counts":{"failures":1}');
@@ -489,7 +490,7 @@ describe("engine: a discarded outbox is said out loud", () => {
     let release: ((r: {ok: true}) => void) | null = null;
     let cancelled = 0;
     const engine = await h.launch({googleSignIn: {
-      start: async (exchange) => { await new Promise<{ok: true}>((r) => { release = r; }); return exchange("attempt-ok"); },
+      start: async (exchange) => { await new Promise<{ok: true}>((r) => { release = r; }); return exchange("attempt-ok", "the-verifier"); },
       cancel: () => { cancelled += 1; }
     }});
     const pending = engine.signInWithGoogle();
@@ -503,9 +504,13 @@ describe("engine: a discarded outbox is said out loud", () => {
 
   it("renews the token on the minute tick while the app runs, so a long day never ends signed out", async () => {
     const h = createHarness();
+    // A token good for 25 hours: due once under a day AND under half its life (12.5 h) remains, which the minute tick reaches after 12.5 hours.
+    const realSignIn = h.api.signIn.bind(h.api);
+    h.api.signIn = async (id, pw) => ({...(await realSignIn(id, pw)), expiresAt: Date.now() + 25 * 60 * 60_000});
     const engine = await ready(h);
+    await vi.advanceTimersByTimeAsync(12 * 60 * 60_000);
     expect(h.api.calls.filter((c) => c === "refresh")).toEqual([]);
-    await vi.advanceTimersByTimeAsync(6 * 24 * 60 * 60_000 + 2 * 60_000);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
     expect(h.api.calls.filter((c) => c === "refresh")).toEqual(["refresh"]);
     expect(engine.status().blockers).not.toContain("SIGNED_OUT");
     await engine.quit();

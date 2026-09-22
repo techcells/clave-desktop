@@ -268,14 +268,15 @@ socket error with an address, crossing IPC); the cancel handle is registered bef
 and a run's `finally` clears only its own handle (two-starts-in-one-tick and cancel-during-bind
 tests); `quit()` cancels a browser wait and a sign-in landing after quit runs none of the
 after-steps; the base-URL check now precedes the NO_READER_YET throw; stale header comment fixed.
-OPEN FOR THE OWNER (server-side design, not this diff): I1 — the loopback return URL carries no
-proof of possession: a malicious LOCAL process that binds a loopback port and makes the browser
-open `…/login/google?returnUrl=http://127.0.0.1:<its port>/callback` receives a valid attempt id
-(single use, 30 s) if Google auto-consents. RFC 8252's answer is PKCE (the app sends a code
-challenge with the login URL, the server stores it on the attempt, the exchange requires the
-verifier). Cost to add in clave-back: OAuthAttempt gets one field, GoogleLogin/callback pass one
-parameter through, the exchange checks a hash — about half a day with tests. Recommendation: do it
-before the release flavour ships; not needed for the internal flavour (stub API).
+RECORDED (server-side design, not this diff): I1 — the loopback return URL carried no proof of
+possession, so an intercepted attempt id (from the address bar, a browser history, the server's
+Information log, or a guessed ObjectId within 30 s) could be exchanged by anyone. RFC 7636 PKCE
+closes THAT: the app sends a code challenge with the login URL, the server stores it on the attempt,
+the exchange requires the verifier, and a wrong verifier burns the attempt. CORRECTED after the PKCE
+review (2026-09-22): PKCE does NOT stop a malicious local process that starts its OWN Google login
+with its own challenge and steers the victim's browser through it — that is phishing-grade local
+malware running as the user, which no server-side measure can tell from the real app; out of scope,
+like any process that can already read the user's session file.
 ALSO: the engine now renews the token while running (`session.refreshIfDue()` on the minute tick;
 Task 7 I1) — 3 tests, 5 mutations caught.
 
@@ -366,3 +367,45 @@ Mobile has no evidence-row renderer. Wording proposed to the owner; commit await
 - 2026-09-22: front-end committed on `prod` as `1e0472b` ("profile evidence: label desktop-agent rows
   as seen at work"), not pushed. clave-back `f6989a3` on `prod`, not pushed. App repo: D's code in
   `c67eb0c` (packaging session's sweep) + `470154a` (D's ledger docs). Nothing pushed anywhere.
+
+## PKCE on the loopback handoff (2026-09-22, owner: "start with 1, then 2, then 3")
+
+clave-back (working tree, uncommitted): `TeamEx.Common/Security/Pkce.cs` (S256; verifier 43–128 chars
+of the unreserved set; challenge = base64url(SHA-256), 43 chars; fixed-time compare); `OAuthAttempt`
++ `codeChallenge` (BsonIgnoreIfNull, additive) and its DTO; `OAuthAttemptRequest.CodeChallenge`;
+`CreateOAuthAttemptAsync` keeps a well-formed challenge on every outcome (a malformed one is dropped,
+so the attempt behaves like a web one); `GoogleLogin(codeChallenge)` → callback → attempt;
+`GET oAuthAttempt/{id}?codeVerifier=` → `AuthenticateByOAuthAttemptIdAsync(id, verifier)`: an
+attempt with a challenge needs the matching verifier, else Unauthorized — and the attempt is already
+spent, so an intercepted id is burnt; attempts without a challenge (web) ignore any verifier. Tests:
+`PkceTests` (RFC 7636 appendix B vector, shapes, max length), 4 new `SecurityServiceOAuthTests`; 5
+mutations caught; suite 1362 / 5 skipped; API builds. Only the Google LOGIN carries it (v1 scope).
+App: `pkcePair()` (32 random bytes → verifier, S256 challenge), the challenge in the login URL, the
+verifier handed to `exchange` and sent as `?codeVerifier=`; port/stub/fake/engine updated; tests
+pin the RFC vector, that the URL's challenge is the hash of the verifier given to the exchange, and
+that the verifier never appears in the URL; 3 mutations caught. Ruling R19: PKCE is required only
+when the attempt carries a challenge, so the web app is untouched.
+
+## Item 2: single-flight taxonomy (2026-09-22)
+
+Server: `AgentService.CurrentTaxonomyAsync` builds under a process-wide `SemaphoreSlim(1,1)` with a
+second cache check inside the lock; test: three concurrent callers on a cold cache → one repository
+read, the same instance answered; 2 mutations caught; suite 1363 / 5 skipped. App: the taxonomy cache
+shares a refresh in flight (`inFlight` promise), so the sign-in's forced refresh and the tick's
+ordinary one are one request; test pins one call and that a later forced refresh is new; 1 mutation
+caught.
+
+- PKCE review (independent, 31 mutations, both repos): approve with reservations, no code defect.
+  Closed: a malformed `codeChallenge` is now REFUSED by `GoogleLogin` (BadRequest) instead of
+  silently downgrading to a web attempt (ruling R20); controller pass-through pinned by
+  `SecurityControllerPkceTests` (exchange hands the verifier; the three actions carry the parameter;
+  malformed refused); the semaphore's `finally` release pinned (a failed build lets the next caller
+  build); boundary shapes pinned (42-char verifier, 44-char challenge); the concurrency test releases
+  its gate in `finally` so a failed assertion cannot wedge the test process; the ledger's I1 claim
+  corrected (above). Noted, not changed: `oAuthAttempts` gains `codeChallenge` — only clave-back reads
+  that collection; a rolling deploy could 500 one desktop exchange during the overlap (user retries);
+  attempt ids are ObjectIds and the spend is find-then-replace (pre-existing, web attempts).
+- Final state after the PKCE review's closures (2026-09-22): clave-back 1372 passed / 5 skipped, API
+  builds, 12 files changed (uncommitted); app 3197 passed / 105 files, typecheck clean, 13 files
+  changed (uncommitted). A wedged-lock mutation hung a test run once (A2); the concurrency test now
+  fails on a 5 s timeout instead.

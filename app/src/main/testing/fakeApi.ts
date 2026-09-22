@@ -8,6 +8,8 @@ export interface FakeApi extends ClaveApi {
   taxonomyValue: Taxonomy;
   names: string[];
   submitted: ApprovedStatement[][];
+  /** The PKCE verifiers handed to `exchangeOAuthAttempt`, in order. */
+  verifiers: string[];
   calls: string[];
   tokenCounter: number;
 }
@@ -28,14 +30,15 @@ export function createFakeApi(now: () => number): FakeApi {
   };
   const session = (api: FakeApi, userId: string): Session => ({token: `token-${++api.tokenCounter}`, expiresAt: now() + 7 * 24 * 60 * 60_000, userId});
   const api: FakeApi = {
-    failWith: null, failQueue: [], taxonomyValue: TAXONOMY_V1, names: ["Sardor Astanov"], submitted: [], calls: [], tokenCounter: 0,
+    failWith: null, failQueue: [], taxonomyValue: TAXONOMY_V1, names: ["Sardor Astanov"], submitted: [], verifiers: [], calls: [], tokenCounter: 0,
     async signIn(identifier, password) {
       api.calls.push("signIn"); fail(api);
       if (password !== "correct") throw new ApiError("BAD_CREDENTIALS");
       return session(api, `user:${identifier}`);
     },
-    async exchangeOAuthAttempt(attemptId) {
+    async exchangeOAuthAttempt(attemptId, codeVerifier) {
       api.calls.push("exchangeOAuthAttempt"); fail(api);
+      api.verifiers.push(codeVerifier);
       if (attemptId !== "attempt-ok") throw new ApiError("UNAUTHORISED");
       return session(api, "user:google");
     },

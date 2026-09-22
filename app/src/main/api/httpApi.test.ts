@@ -131,17 +131,18 @@ describe("http clave-back client", () => {
       {body: ok({accountId: "acc-1", accessToken: {value: TOKEN}, isSuccessful: false})},
       {body: refused(6)}
     ]);
-    expect(await a.exchangeOAuthAttempt("att/1 ?")).toEqual({token: TOKEN, expiresAt: EXP * 1000, userId: "acc-1"});
-    expect(seen[0]).toMatchObject({url: "https://api.test/api/security/oAuthAttempt/att%2F1%20%3F", method: "GET"});
+    expect(await a.exchangeOAuthAttempt("att/1 ?", "v3rifier~x")).toEqual({token: TOKEN, expiresAt: EXP * 1000, userId: "acc-1"});
+    expect(seen[0]).toMatchObject({url: "https://api.test/api/security/oAuthAttempt/att%2F1%20%3F?codeVerifier=v3rifier~x", method: "GET"});
     expect(seen[0]!.headers.Authorization).toBeUndefined();
-    expect(await codeOfRejection(a.exchangeOAuthAttempt("att-2"))).toBe("UNAUTHORISED");
-    expect(await codeOfRejection(a.exchangeOAuthAttempt("att-3"))).toBe("UNAUTHORISED");
-    expect(await codeOfRejection(a.exchangeOAuthAttempt("att-4"))).toBe("UNAUTHORISED");
+    expect(await codeOfRejection(a.exchangeOAuthAttempt("att-2", "v"))).toBe("UNAUTHORISED");
+    expect(await codeOfRejection(a.exchangeOAuthAttempt("att-3", "v"))).toBe("UNAUTHORISED");
+    expect(await codeOfRejection(a.exchangeOAuthAttempt("att-4", "v"))).toBe("UNAUTHORISED");
     const b = api([{body: ok({accountId: null, accessToken: {value: TOKEN}, isSuccessful: true})}]);
-    expect(await codeOfRejection(b.api.exchangeOAuthAttempt("att-5"))).toBe("UNAUTHORISED");
+    expect(await codeOfRejection(b.api.exchangeOAuthAttempt("att-5", "v"))).toBe("UNAUTHORISED");
     // A string the URL cannot carry never reaches fetch and never throws anything but a code.
     const c = api([]);
-    expect(await codeOfRejection(c.api.exchangeOAuthAttempt("\ud800"))).toBe("UNAUTHORISED");
+    expect(await codeOfRejection(c.api.exchangeOAuthAttempt("\ud800", "v"))).toBe("UNAUTHORISED");
+    expect(await codeOfRejection(c.api.exchangeOAuthAttempt("att-6", "\ud800"))).toBe("UNAUTHORISED");
     expect(c.seen).toEqual([]);
   });
 
@@ -251,7 +252,7 @@ describe("http clave-back client against a real local server", () => {
   it("gives up on a silent server at the deadline and answers OFFLINE, with the taxonomy's own longer deadline", async () => {
     const a = createHttpApi({baseUrl: base, timeouts: {callMs: 150, taxonomyMs: 600}});
     let started = Date.now();
-    expect(await codeOfRejection(a.exchangeOAuthAttempt("never-answered"))).toBe("OFFLINE");
+    expect(await codeOfRejection(a.exchangeOAuthAttempt("never-answered", "v"))).toBe("OFFLINE");
     const profileTook = Date.now() - started;
     expect(profileTook).toBeLessThan(500);
     started = Date.now();

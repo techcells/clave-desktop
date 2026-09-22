@@ -33,14 +33,14 @@ describe("session", () => {
   it("signInWith stores a session obtained elsewhere exactly like a password sign-in, names included", async () => {
     const {api, make, fs} = setup();
     const store = make();
-    const result = await store.signInWith(() => api.exchangeOAuthAttempt("attempt-ok"));
+    const result = await store.signInWith(() => api.exchangeOAuthAttempt("attempt-ok", "verifier"));
     expect(result).toEqual({ok: true});
     expect(store.userId()).toBe("user:google");
     expect(store.names()).toEqual(["Sardor Astanov"]);
     expect(api.calls).toEqual(["exchangeOAuthAttempt", "profile"]);
     expect(fs.everything()).not.toContain("attempt-ok");
     await store.signOut();
-    expect(await store.signInWith(() => api.exchangeOAuthAttempt("attempt-bad"))).toEqual({ok: false, code: "UNAUTHORISED"});
+    expect(await store.signInWith(() => api.exchangeOAuthAttempt("attempt-bad", "verifier"))).toEqual({ok: false, code: "UNAUTHORISED"});
     expect(store.current()).toBeNull();
     expect(store.names()).toEqual([]);
   });

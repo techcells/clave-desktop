@@ -652,7 +652,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       if (!deps.googleSignIn) return {ok: false, code: "OAUTH_BROWSER"};
       const browser = deps.googleSignIn;
       background(log.event("SIGN_IN_GOOGLE_STARTED"));
-      const result = await signedInBy(() => browser.start((attemptId) => session.signInWith(() => api.exchangeOAuthAttempt(attemptId))));
+      const result = await signedInBy(() => browser.start((attemptId, codeVerifier) => session.signInWith(() => api.exchangeOAuthAttempt(attemptId, codeVerifier))));
       background(log.event("SIGN_IN_GOOGLE_FINISHED", {failures: result.ok ? 0 : 1}));
       return result;
     },
