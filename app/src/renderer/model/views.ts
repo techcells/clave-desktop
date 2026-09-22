@@ -27,7 +27,8 @@ export function onboardingStep(status: EngineStatus, settings: UserSettings): St
   if (seen < 1) return "pitch";
   if (has("SIGNED_OUT")) return "signIn";
   if (has("MODEL_MISSING") || has("SELF_TEST_NEEDED")) return "model";
-  if (has("NO_PERMISSION") || has("PERMISSION_NEEDS_RESTART")) return "permission";
+  // Not answered yet counts as not granted here: a step the machine has not verified is never skipped.
+  if (has("NO_PERMISSION") || has("PERMISSION_NEEDS_RESTART") || status.checkingPermission) return "permission";
   if (seen < 5) return "neverRead";
   if (seen < 6) return "reviewTime";
   return "done";

@@ -2,7 +2,7 @@ import {describe, expect, it} from "vitest";
 import {EVENT_CHANNELS, INVOKE_CHANNELS, NOTHING_READ_WHY, eventMethod, eventName, invokeName, type EngineStatus} from "./ipc";
 
 const status = (over: Partial<EngineStatus> = {}): EngineStatus =>
-  ({capture: "on", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, ...over});
+  ({capture: "on", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, checkingPermission: false, ...over});
 
 describe("the renderer's surface", () => {
   it("names one bridge method per push channel, by name and not by position", () => {

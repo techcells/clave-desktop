@@ -8,7 +8,10 @@ import type {Blocker, EngineStatus} from "../../shared/ipc";
  * raised, because raising it is followed by a re-read that usually answers the very same thing.
  */
 export const statusSignature = (status: EngineStatus): string => JSON.stringify([
-  status.capture, status.resumeAt, status.extractionPaused, status.pending, status.waitingUpload, status.blockers
+  status.capture, status.resumeAt, status.extractionPaused, status.pending, status.waitingUpload, status.blockers,
+  // The refusal while the permission is being checked has no blocker to change, so the check ending
+  // is the one thing that says "not quite ready" no longer holds.
+  status.checkingPermission
 ]);
 
 /**

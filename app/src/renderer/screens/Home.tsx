@@ -81,7 +81,11 @@ export function Home({shell}: {shell: Shell}): ReactNode {
           is smaller than the divider's below it, so it costs no space either. */}
       <p className="note" aria-live="polite">{nothingReadLine(status, (ms) => clock.format(new Date(ms))) ?? ""}</p>
 
-      {blocker === null ? null : <Fix shell={shell} blocker={blocker} />}
+      {blocker !== null ? <Fix shell={shell} blocker={blocker} />
+        // Only when nothing else stands in the way: a real blocker is the one thing to act on, and
+        // the check ends by itself. A quiet line, no button — there is nothing to fix yet.
+        : status.checkingPermission ? <div><hr className="divider" /><p className="note">{COPY.home.checkingPermission}</p></div>
+        : null}
 
       <div>
         <hr className="divider" />

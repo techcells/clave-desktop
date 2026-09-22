@@ -112,6 +112,9 @@ export const COPY = {
     // so the sentence above it stays the same one the tray uses.
     since: (time: string) => `Since ${time}.`,
     notReady: "Not quite ready. Try again in a moment.",
+    // Not a blocker: nothing is known to be wrong yet, so it has no fix button (`checkingPermission`).
+    // "Up to a minute" is the reader's measured cold start after a reboot.
+    checkingPermission: "Checking Screen Recording. This can take up to a minute after the app starts.",
     pending: (n: number) => (n === 1 ? "1 statement is waiting for you." : `${n} statements are waiting for you.`),
     nothingPending: "Nothing is waiting for you.",
     lowBattery: "Writing statements is paused while the battery is low.",

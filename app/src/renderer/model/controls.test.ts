@@ -4,7 +4,7 @@ import {BLOCKERS} from "../copy";
 import {addEntry, FIX_ACTIONS, fixAction, removeEntry, statusSignature} from "./controls";
 
 const status = (patch: Partial<EngineStatus> = {}): EngineStatus =>
-  ({capture: "off", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, ...patch});
+  ({capture: "off", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, checkingPermission: false, ...patch});
 
 describe("the one fix button", () => {
   it("gives every blocker exactly one action, and no blocker two", () => {
@@ -44,6 +44,8 @@ describe("when a notice about the status has gone stale", () => {
     expect(statusSignature(status({pending: 1}))).not.toBe(base);
     expect(statusSignature(status({waitingUpload: 1}))).not.toBe(base);
     expect(statusSignature(status({blockers: ["SIGNED_OUT"]}))).not.toBe(base);
+    // The one change a refusal during the permission check waits for: nothing else moves when it ends.
+    expect(statusSignature(status({checkingPermission: true}))).not.toBe(base);
   });
 
   it("tells one blocker list from another, including its order", () => {

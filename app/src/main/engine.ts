@@ -55,6 +55,13 @@ export interface EngineStatus {
    * is producing something, and whenever the loop is not running.
    */
   nothingRead: NothingRead | null;
+  /**
+   * The reader has not yet said whether Screen Recording is allowed: the first seconds after launch,
+   * while the helper starts (most of a minute after a reboot). Deliberately NOT a blocker: nothing
+   * is known to be wrong, so there is no sentence to fix and no button — capture simply waits. It
+   * used to be `NO_PERMISSION`, which told every user at every launch that their grant was gone.
+   */
+  checkingPermission: boolean;
 }
 
 /**
@@ -288,7 +295,8 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
     if (deps.downloader.state().kind !== "ready") found.push("MODEL_MISSING");
     else if (settings.get().selfTestPassedFor !== selfTestKey(deps.appVersion, deps.modelSha256)) found.push("SELF_TEST_NEEDED");
     if (permission === "needsRestart") found.push("PERMISSION_NEEDS_RESTART");
-    else if (permission !== "granted") found.push("NO_PERMISSION");
+    // Only a real "no". No answer yet (`unknown`) keeps capture off through `wouldRun` instead.
+    else if (permission === "denied") found.push("NO_PERMISSION");
     if (settings.needsReview()) found.push("SETTINGS_NEED_REVIEW");
     if (model.broken()) found.push("MODEL_PROBLEM");
     if (readerProblem) found.push("READER_PROBLEM");
@@ -307,8 +315,13 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
    * that is a reason not to run, not something wrong the user is told about. This is the ONE gate
    * every path to `loop.start()` passes through (`evaluate` is the only caller), which is what keeps
    * the turn between a sign-in and its stamp at zero reads.
+   *
+   * A permission nobody has answered yet is the same kind of reason: `refreshPermission` never lets
+   * an `unknown` replace a real answer, so this holds only until the reader's first word after launch.
    */
-  const wouldRun = (): boolean => settings.get().captureOn && !settingsOwnerPending() && blockers().length === 0 && !stopped;
+  const checkingPermission = (): boolean => permission === "unknown";
+  const wouldRun = (): boolean =>
+    settings.get().captureOn && !settingsOwnerPending() && !checkingPermission() && blockers().length === 0 && !stopped;
   /** Pending statements belong to one user: with nobody signed in there is nothing anyone may see. */
   const visiblePending = (): PendingStatement[] => (session.current() ? pipeline.digest() : []);
 
@@ -322,7 +335,8 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       pending: visiblePending().length, waitingUpload: uploader.waitingCount(),
       // Only ever set while the loop is running: the loop retracts it on its way out, so there is no
       // second place that has to remember to.
-      nothingRead
+      nothingRead,
+      checkingPermission: checkingPermission()
     };
   }
   const emit = () => {
@@ -498,7 +512,8 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       // it through would make capture flap off and on with every missed read, and would log a
       // revocation that never happened. Only "granted"/"denied"/"needsRestart" change anything.
       // (At launch the state starts out "unknown" on its own, so a reader that cannot answer then
-      // still blocks capture — nothing better is known yet. A reader that is permanently broken is
+      // still holds capture off, as `checkingPermission` — nothing better is known yet, and nothing
+      // is known to be wrong either. A reader that is permanently broken is
       // the capture loop's READER_PROBLEM supervision's business, not this function's.)
       if (answer !== "unknown") {
         const lost = permission === "granted" && answer !== "granted";
@@ -629,8 +644,9 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       // the user started: the refusal leaves the pause exactly as it was. The settings not being
       // stamped with this account yet refuses the switch as well — writing `captureOn: true` into a
       // file `ensureSettingsOwner` is about to reset would lose the user's click, and reporting it
-      // as on while `wouldRun` holds it off would be a lie.
-      if (on && (blockers().length > 0 || settingsOwnerPending())) { emit(); return {ok: false, blockers: blockers()}; }
+      // as on while `wouldRun` holds it off would be a lie. A permission not answered yet refuses it
+      // for the same reason, with the same empty list: "ask me again in a moment".
+      if (on && (blockers().length > 0 || settingsOwnerPending() || checkingPermission())) { emit(); return {ok: false, blockers: blockers()}; }
       resumeNoticeDue = false;                // from here on the switch is the user's doing, not a resume
       if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
       resumeAt = null;

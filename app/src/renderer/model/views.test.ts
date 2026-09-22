@@ -7,7 +7,7 @@ import {NOTHING_READ_WHY} from "../../shared/ipc";
 import {APP_FILE, BLOCKERS, CLAIMS, COPY, KNOWN_LIMITS, NOTHING_READ, PERMISSION_STEPS} from "../copy";
 import {downloadView, firstBlocker, gigabytes, isTranslocated, LONG_WAIT_MS, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
 
-const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus => ({capture: "off", resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null});
+const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus => ({capture: "off", resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false});
 const settings = (onboardingStep: number): UserSettings => ({exclusions: [], excludedSites: [], reviewTime: "17:30", captureOn: false, onboardingStep});
 
 describe("the pitch", () => {
@@ -57,6 +57,9 @@ describe("onboarding", () => {
     expect(onboardingStep(status(["MODEL_MISSING", "NO_PERMISSION"]), settings(1))).toBe("model");
     expect(onboardingStep(status(["SELF_TEST_NEEDED", "NO_PERMISSION"]), settings(1))).toBe("model");
     expect(onboardingStep(status(["PERMISSION_NEEDS_RESTART"]), settings(1))).toBe("permission");
+    // Not answered yet is not granted: the step is never skipped on a guess.
+    expect(onboardingStep({...status([]), checkingPermission: true}, settings(1))).toBe("permission");
+    expect(onboardingStep({...status([]), checkingPermission: true}, settings(0))).toBe("pitch");
     expect(onboardingStep(status([]), settings(1))).toBe("neverRead");
     expect(onboardingStep(status([]), settings(5))).toBe("reviewTime");
     expect(onboardingStep(status([]), settings(6))).toBe("done");

@@ -8,7 +8,7 @@ const ALL_BLOCKERS: Blocker[] = [
 ];
 
 const status = (capture: EngineStatus["capture"], blockers: Blocker[], pending = 0): EngineStatus =>
-  ({capture, resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null});
+  ({capture, resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false});
 
 describe("tray state", () => {
   it("has an explicit answer for every blocker the engine can report", () => {
@@ -32,6 +32,9 @@ describe("tray state", () => {
     expect(trayState(status("pausedByUser", []))).toBe("off");
     expect(trayState(status("off", ["MODEL_MISSING", "STORAGE_PROBLEM"]))).toBe("problem");
     expect(trayState(status("off", ["MODEL_MISSING", "SELF_TEST_NEEDED"]))).toBe("off");
+    // The first seconds after launch: nothing is known to be wrong, so no "!" beside the clock.
+    const checking: EngineStatus = {...status("off", []), checkingPermission: true};
+    expect(trayState(checking)).toBe("off");
   });
 
   it("changes its key only for what the tray actually shows", () => {

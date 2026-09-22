@@ -17,14 +17,14 @@ import type {
 export type Scenario =
   | "onboarding-pitch" | "onboarding-signin" | "onboarding-model" | "onboarding-permission" | "onboarding-translocated"
   | "onboarding-neverread" | "onboarding-reviewtime" | "onboarding-done"
-  | "home-on" | "home-off" | "home-problem"
+  | "home-on" | "home-off" | "home-problem" | "home-checking"
   | "home-nothing-notallowed" | "home-nothing-nowindow" | "home-nothing-other"
   | "review" | "review-empty" | "settings";
 
 export const SCENARIOS: readonly Scenario[] = [
   "onboarding-pitch", "onboarding-signin", "onboarding-model", "onboarding-permission", "onboarding-translocated",
   "onboarding-neverread", "onboarding-reviewtime", "onboarding-done",
-  "home-on", "home-off", "home-problem",
+  "home-on", "home-off", "home-problem", "home-checking",
   "home-nothing-notallowed", "home-nothing-nowindow", "home-nothing-other",
   "review", "review-empty", "settings"
 ];
@@ -69,7 +69,7 @@ const SENT = [
 interface Start { status: EngineStatus; settings: UserSettings; download: DownloadState; permission: Permission; review: ReviewView }
 
 const status = (over: Partial<EngineStatus> = {}): EngineStatus =>
-  ({capture: "off", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, ...over});
+  ({capture: "off", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, checkingPermission: false, ...over});
 
 const settings = (over: Partial<UserSettings> = {}): UserSettings => ({
   exclusions: ["1Password", "Messages", "Mail", "Calendar"],
@@ -116,6 +116,10 @@ export function scenarioStart(scenario: Scenario): Start {
       return {...base, status: status(), settings: settings()};
     case "home-problem":
       return {...base, status: status({blockers: ["NO_PERMISSION"]}), settings: settings(), permission: "denied"};
+    // The first seconds after launch: the reader has not answered yet. It answers "granted" after
+    // CHECK_MS, and reading comes on by itself because the switch was left on.
+    case "home-checking":
+      return {...base, status: status({checkingPermission: true}), settings: settings({captureOn: true})};
     // Reading is on, healthy and producing nothing — one scenario per reason, because the sentence is
     // the only thing that differs between them and the three have to be readable side by side. The
     // `since` is 23 minutes back: past the engine's ten-minute threshold, and a wall-clock time that
@@ -174,6 +178,10 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
     downloading = null;
   };
 
+  if (engine.checkingPermission) {
+    setTimeout(() => { pushStatus({checkingPermission: false, capture: stored.captureOn ? "on" : "off"}); }, CHECK_MS);
+  }
+
   return {
     status: async () => engine,
     review: async () => review,
@@ -198,7 +206,7 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
       return true;
     },
     setCapture: async (on) => {
-      if (on && engine.blockers.length > 0) return {ok: false, blockers: engine.blockers};
+      if (on && (engine.blockers.length > 0 || engine.checkingPermission)) return {ok: false, blockers: engine.blockers};
       pushStatus({capture: on ? "on" : "off", resumeAt: null});
       stored = {...stored, captureOn: on};
       return {ok: true};
@@ -276,6 +284,9 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
     onDownload: (cb) => { downloadListeners.add(cb); return () => { downloadListeners.delete(cb); }; }
   };
 }
+
+/** How long "home-checking" waits before the reader's first answer: long enough to read the line. */
+const CHECK_MS = 6000;
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
 

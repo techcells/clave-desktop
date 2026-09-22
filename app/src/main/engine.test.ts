@@ -683,15 +683,60 @@ describe("engine", () => {
     await engine.quit();
   });
 
-  it("still starts with NO_PERMISSION when the reader cannot answer at launch", async () => {
+  it("holds capture off while the reader has not answered at launch, without calling it a missing permission", async () => {
     const h = createHarness();
     h.reader.permission = async () => { throw new Error("reader process died"); };
     const engine = await h.launch();
-    // Nothing better is known than "unknown", so the blocker stands: a permanently broken reader is
-    // the loop's READER_PROBLEM supervision's job, not this one's to guess around.
-    expect(engine.status().blockers).toContain("NO_PERMISSION");
+    // Nothing better is known than "unknown", so capture waits — but nothing is known to be WRONG
+    // either, so there is no blocker to show. A permanently broken reader is the loop's
+    // READER_PROBLEM supervision's job, not this one's to guess around.
+    expect(engine.status()).toMatchObject({capture: "off", checkingPermission: true});
+    expect(engine.status().blockers).not.toContain("NO_PERMISSION");
     expect(await engine.recheckPermission()).toBe("unknown");
     await engine.quit();
+  });
+
+  it("at a relaunch, waits for the reader's first answer and then resumes by itself, with no alarm on the way", async () => {
+    const h = createHarness();
+    const first = await ready(h);
+    await first.setCapture(true);
+    await first.quit();
+    const readsBefore = h.reader.reads;                         // the first run's own reads
+
+    // The helper is still starting: every ask has no answer, as for the first seconds after launch.
+    h.reader.permission = async () => { throw new Error("helper still starting"); };
+    const second = await h.launch();
+    expect(second.status()).toMatchObject({capture: "off", blockers: [], checkingPermission: true});
+    // Refused with nothing to fix — "ask me again in a moment" — and the stored switch is untouched.
+    expect(await second.setCapture(true)).toEqual({ok: false, blockers: []});
+    expect(second.settings().captureOn).toBe(true);
+    await vi.advanceTimersByTimeAsync(PIPELINE_TICK_MS);
+    expect(second.status()).toMatchObject({capture: "off", checkingPermission: true});
+    expect(h.reader.reads).toBe(readsBefore);                   // nothing read on a guess
+
+    h.reader.permission = async () => "granted";                // the helper is up
+    await vi.advanceTimersByTimeAsync(PIPELINE_TICK_MS);
+    expect(second.status()).toMatchObject({capture: "on", blockers: [], checkingPermission: false});
+    expect(h.resumedNotices).toBe(1);
+    expect(logCodes(h)).not.toContain("PERMISSION_LOST");
+    await second.quit();
+  });
+
+  it("shows the Screen Recording blocker once the reader's first answer is a real no", async () => {
+    const h = createHarness();
+    const first = await ready(h);
+    await first.setCapture(true);
+    await first.quit();
+
+    h.reader.permission = async () => { throw new Error("helper still starting"); };
+    const second = await h.launch();
+    expect(second.status().blockers).toEqual([]);
+    h.reader.permission = async () => "denied";
+    await vi.advanceTimersByTimeAsync(PIPELINE_TICK_MS);
+    expect(second.status()).toMatchObject({capture: "off", blockers: ["NO_PERMISSION"], checkingPermission: false});
+    // Never granted in this run, so nothing was lost.
+    expect(logCodes(h)).not.toContain("PERMISSION_LOST");
+    await second.quit();
   });
 
   it("keeps a running pause through a refused switch-on, and calls it a pause only while nothing else blocks", async () => {
