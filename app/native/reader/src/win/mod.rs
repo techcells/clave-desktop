@@ -130,4 +130,43 @@ mod tests {
         assert!(text.contains("retry logic in the payment service"), "{text}");
         assert!(lines.iter().all(|l| (0.0..=1.0).contains(&l.top) && l.top < l.bottom && l.x < l.right));
     }
+
+    /// Measures a browser's toolbar band: every top-level window whose title contains
+    /// `CLAVE_PROBE_TITLE` is captured and its lines printed with their edges IN POINTS, so the
+    /// bottom of the address row and the top of the page can be read off. Only windows with that
+    /// title are touched, so point it at a page of your own:
+    ///   CLAVE_PROBE_TITLE=CLAVE-BAND cargo test --release -- --ignored a_browser_band_is_measured --nocapture
+    #[test]
+    #[ignore]
+    fn a_browser_band_is_measured() {
+        use ::windows::Win32::Foundation::{HWND, LPARAM};
+        use ::windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextW};
+        use ::windows::core::BOOL;
+
+        let wanted = std::env::var("CLAVE_PROBE_TITLE").expect("set CLAVE_PROBE_TITLE");
+        unsafe extern "system" fn visit(hwnd: HWND, found: LPARAM) -> BOOL {
+            let mut buffer = [0u16; 512];
+            // SAFETY: a fixed buffer; `found` is the Vec below, alive for the enumeration.
+            let length = unsafe { GetWindowTextW(hwnd, &mut buffer) }.max(0) as usize;
+            let found = unsafe { &mut *(found.0 as *mut Vec<(HWND, String)>) };
+            found.push((hwnd, String::from_utf16_lossy(&buffer[..length])));
+            BOOL(1)
+        }
+        prologue();
+        let platform = WinPlatform::new();
+        let mut all: Vec<(HWND, String)> = Vec::new();
+        // SAFETY: the callback only pushes onto `all`, which outlives the call.
+        unsafe { EnumWindows(Some(visit), LPARAM(&mut all as *mut _ as isize)) }.expect("windows are enumerated");
+        let matches: Vec<_> = all.into_iter().filter(|(_, title)| title.contains(&wanted)).collect();
+        assert!(!matches.is_empty(), "no window title contains {wanted}");
+        for (hwnd, title) in matches {
+            let captured = platform.capture(windows::window_id(hwnd)).expect("the window is captured");
+            let lines = platform.recognise(&captured).expect("the recogniser runs");
+            let points = |fraction: f64| fraction * captured.frame.height as f64 / captured.scale;
+            println!("== {title}  {}x{} px, scale {}", captured.frame.width, captured.frame.height, captured.scale);
+            for line in crate::text::order(lines) {
+                println!("  top {:6.1}  bottom {:6.1}  x {:5.3}  {}", points(line.top), points(line.bottom), line.x, line.text);
+            }
+        }
+    }
 }
