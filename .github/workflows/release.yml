@@ -1,13 +1,14 @@
-# Builds the macOS app and, on a version tag, publishes it as a GitHub Release (DMG, ZIP, SHA256SUMS,
-# the artefacts report). Runs the same pipeline as a local build (docs/superpowers/plans/2026-09-22-packaging.md):
+# Builds the macOS app and publishes it as a GitHub Release with the DMG. Runs the same pipeline as a
+# local build (docs/superpowers/plans/2026-09-22-packaging.md):
 #   build:native -> build -> package:stage -> package:bundle -> package:sign -> package:artefacts
 #
-# Triggers:
-#   push a tag vX.Y.Z   builds and publishes a release (the tag must equal app/package.json's version)
-#   Run workflow        builds only; the DMG and ZIP are attached to the run as a workflow artifact
+# Releasing: from a clean main, run `pnpm --dir app release` (bumpp). It asks patch/minor/major, bumps
+# app/package.json, commits "release vX.Y.Z", tags vX.Y.Z and pushes both. The tag push starts this
+# workflow, which builds and publishes the release (the tag must equal app/package.json's version).
+# "Run workflow" builds only: nothing is published, the files are attached to the run for 14 days.
 #
 # Flavour: the "Run workflow" input, else the repository variable CLAVE_FLAVOUR, else `internal`.
-# An internal build is published as a pre-release.
+# The release holds the DMG only; the run's attachment also has the ZIP, SHA256SUMS and the artefacts report.
 #
 # Repository settings this needs (Settings -> Secrets and variables -> Actions):
 #   variable MACOS_SIGNING_IDENTITY   the certificate NAME, e.g. "Clave Agent Dev" or
@@ -76,10 +77,10 @@ jobs:
         run: |
           set -euo pipefail
           version=$(node -p "require('./app/package.json').version")
-          echo "VERSION=$version" >> "$GITHUB_ENV"
           if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo "::error::tag $GITHUB_REF_NAME does not match app/package.json version $version"; exit 1
           fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
           if [[ "$HAS_CERT" != "true" || -z "$SIGN_IDENTITY" ]]; then
             echo "::error::set the MACOS_CERTIFICATE_P12 / MACOS_CERTIFICATE_PASSWORD secrets and the MACOS_SIGNING_IDENTITY variable"; exit 1
           fi
@@ -196,12 +197,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          dir="app/out/$FLAVOUR/artefacts"
-          prerelease=()
-          if [[ "$FLAVOUR" != "release" ]]; then prerelease=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" \
-            "$dir"/*.dmg "$dir"/*.zip "$dir/SHA256SUMS" "$dir/artefacts-report.json" \
-            --title "Clave Agent $GITHUB_REF_NAME" --generate-notes ${prerelease[@]+"${prerelease[@]}"}
+          name="Clave Agent $GITHUB_REF_NAME"
+          if [[ "$FLAVOUR" != "release" ]]; then name="$name (internal)"; fi
+          gh release create "$GITHUB_REF_NAME" app/out/"$FLAVOUR"/artefacts/*.dmg --title "$name" --generate-notes --latest
 
       - name: Remove the signing keychain
         if: always()

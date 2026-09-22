@@ -23,6 +23,7 @@
     "package:bundle": "node scripts/package/bundle.mjs",
     "package:sign": "node scripts/package/sign.mjs",
     "package:artefacts": "node scripts/package/artefacts.mjs",
+    "release": "bumpp --commit \"release v%s\" --tag \"v%s\" --push",
     "start:reader": "node scripts/build.mjs && node scripts/start-reader.mjs",
     "start:reader:scripted": "node scripts/build.mjs && node scripts/start-reader.mjs --scripted",
     "reader:eval": "node scripts/build.mjs && node scripts/reader-eval.mjs"
@@ -39,6 +40,7 @@
     "@types/node": "22.20.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.3",
+    "bumpp": "12.3.0",
     "electron": "44.4.1",
     "esbuild": "0.28.2",
     "typescript": "7.0.2",
