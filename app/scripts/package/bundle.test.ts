@@ -5,14 +5,22 @@ import {execFileSync, spawnSync} from "node:child_process";
 import {existsSync, readdirSync, readFileSync, statSync} from "node:fs";
 import {createRequire} from "node:module";
 import {join} from "node:path";
-import {fileURLToPath} from "node:url";
+import {fileURLToPath, pathToFileURL} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as bundleScript from "./bundle.mjs";
 import * as walkScript from "./walk.mjs";
 
 type Options = Record<string, unknown> & {appBundleId: string; name: string; executableName: string; appVersion: string; buildVersion: string; appCategoryType: string; appCopyright: string};
 type Entry = {rel: string; kind: string; mode?: number};
-const {BUNDLE_IDS, PLIST_REMOVE, PLIST_SET, ASAR_UNPACK, ASAR_REQUIRED, ASAR_FORBIDDEN, UNPACKED_ROOTS, bundleIdFor, copyrightFor, findElectronZip, packagerOptions, expectedPlist, checkBundle, plistAsObject, pgrepPattern} = bundleScript as {
+type WinOptions = Record<string, unknown> & {name: string; executableName: string; appVersion: string; buildVersion: string; appCopyright: string; win32metadata: Record<string, string>};
+const {BUNDLE_IDS, PLIST_REMOVE, PLIST_SET, ASAR_UNPACK, ASAR_REQUIRED, ASAR_FORBIDDEN, UNPACKED_ROOTS, WIN_UNPACKED_ROOTS, bundleIdFor, copyrightFor, findElectronZip, packagerOptions, expectedPlist, checkBundle, plistAsObject, pgrepPattern,
+  windowsFileVersion, winPackagerOptions, expectedVersionInfo, checkWinBundle, versionInfoOf} = bundleScript as {
+  WIN_UNPACKED_ROOTS: string[];
+  windowsFileVersion: (version: unknown) => string | null;
+  winPackagerOptions: (a: Record<string, unknown>) => {options?: WinOptions; error?: string};
+  expectedVersionInfo: (options: WinOptions) => Record<string, string>;
+  checkWinBundle: (a: {listing: Entry[]; versionInfo: Record<string, string>; asarFiles: string[]; unpacked: Entry[]; options: WinOptions}) => Array<{code: string; detail: string}>;
+  versionInfoOf: (exePath: string) => Promise<Record<string, string>>;
   ASAR_REQUIRED: string[];
   ASAR_FORBIDDEN: string[];
   UNPACKED_ROOTS: string[];
@@ -23,7 +31,7 @@ const {BUNDLE_IDS, PLIST_REMOVE, PLIST_SET, ASAR_UNPACK, ASAR_REQUIRED, ASAR_FOR
   ASAR_UNPACK: {unpack: string; unpackDir: string};
   bundleIdFor: (flavour: string) => string | null;
   copyrightFor: (entity: unknown, buildNumber: unknown) => string | null;
-  findElectronZip: (candidates: string[], version: string) => string | null;
+  findElectronZip: (candidates: string[], version: string, platform?: string) => string | null;
   packagerOptions: (a: Record<string, unknown>) => {options?: Options; error?: string};
   expectedPlist: (options: Options) => Record<string, unknown>;
   checkBundle: (a: {listing: Entry[]; plist: Record<string, unknown>; asarFiles: string[]; unpacked: Entry[]; options: Options}) => Array<{code: string; detail: string}>;
@@ -67,13 +75,14 @@ describe("packagerOptions: exactly what packager receives", () => {
     const r = packagerOptions(ARGS);
     expect(r.error).toBeUndefined();
     expect(r.options).toMatchObject({
-      dir: "/out/internal/staging/app", out: "/out/internal/bundle",
+      // Joined, as the function joins them: the same strings on macOS, backslashed on Windows.
+      dir: join("/out/internal/staging", "app"), out: "/out/internal/bundle",
       name: "Clave Agent Internal", executableName: "Clave Agent Internal",
       appBundleId: "dev.clave.agent.internal", helperBundleId: "dev.clave.agent.internal.helper",
       appVersion: "0.1.0", buildVersion: "20260922.0800", platform: "darwin", arch: "arm64",
       electronVersion: "44.4.1", electronZipDir: "/cache/x", overwrite: true, prune: false, derefSymlinks: true, junk: true, quiet: true,
       asar: {unpack: "*.node", unpackDir: "node_modules/{node-llama-cpp,@node-llama-cpp}"}, asarIntegrityDigest: true,
-      extraResource: ["/out/internal/staging/electron/LICENSE", "/out/internal/staging/electron/LICENSES.chromium.html"],
+      extraResource: [join("/out/internal/staging", "electron", "LICENSE"), join("/out/internal/staging", "electron", "LICENSES.chromium.html")],
       extendInfo: {LSUIElement: true, LSMinimumSystemVersion: "14.0"},
       appCategoryType: "public.app-category.productivity", appCopyright: "Copyright © 2026 Clave", darwinDarkModeSupport: true
     });
@@ -168,17 +177,105 @@ describe("checkBundle: the built bundle against the design", () => {
   });
 });
 
+describe("Windows: the app folder instead of the .app", () => {
+  it("finds the win32-x64 zip, and only when asked for Windows", () => {
+    const cands = ["/c/a/electron-v44.4.1-darwin-arm64.zip", "C:\\cache\\h\\electron-v44.4.1-win32-x64.zip", "/c/c/electron-v44.4.1-win32-arm64.zip"];
+    expect(findElectronZip(cands, "44.4.1", "win32")).toBe("C:/cache/h/electron-v44.4.1-win32-x64.zip");
+    expect(findElectronZip(cands, "44.4.1")).toBe("/c/a/electron-v44.4.1-darwin-arm64.zip");
+    expect(findElectronZip(["/c/electron-v44.4.1-win32-arm64.zip"], "44.4.1", "win32")).toBeNull();
+  });
+
+  it("gives Windows a four-part file version, since the macOS build number cannot be one", () => {
+    expect(windowsFileVersion("0.1.1")).toBe("0.1.1.0");
+    expect(windowsFileVersion("12.34.56")).toBe("12.34.56.0");
+    for (const bad of ["20260922.0800", "1.2", "1.2.3.4", "1.2.x", "1.2.70000", undefined]) expect(windowsFileVersion(bad), String(bad)).toBeNull();
+  });
+
+  it("builds the exe with the app's name as its description, the same asar as macOS, and no macOS keys", () => {
+    const r = winPackagerOptions({...ARGS, iconPath: "C:\\repo\\app\\build\\icon.ico"});
+    expect(r.error).toBeUndefined();
+    expect(r.options).toMatchObject({
+      name: "Clave Agent Internal", executableName: "Clave Agent Internal", platform: "win32", arch: "x64",
+      appVersion: "0.1.0", buildVersion: "0.1.0.0", asar: ASAR_UNPACK, asarIntegrityDigest: true, icon: "C:\\repo\\app\\build\\icon.ico",
+      appCopyright: "Copyright © 2026 Clave",
+      win32metadata: {CompanyName: "Clave", FileDescription: "Clave Agent Internal", ProductName: "Clave Agent Internal", InternalName: "Clave Agent Internal",
+        OriginalFilename: "Clave Agent Internal.exe", "requested-execution-level": "asInvoker"}
+    });
+    for (const key of ["appBundleId", "helperBundleId", "extendInfo", "appCategoryType", "darwinDarkModeSupport"]) expect(r.options).not.toHaveProperty(key);
+  });
+
+  it("refuses what the macOS options refuse, and a version Windows cannot carry", () => {
+    expect(winPackagerOptions({...ARGS, flavour: "dev", info: {...INFO, flavour: "dev"}})).toEqual({error: "DEV_FLAVOUR_NOT_PACKAGED"});
+    expect(winPackagerOptions({...ARGS, flavour: "release"})).toEqual({error: "STAGING_FLAVOUR_MISMATCH"});
+    expect(winPackagerOptions({...ARGS, entity: ""})).toEqual({error: "COPYRIGHT_ENTITY_MISSING"});
+    expect(winPackagerOptions({...ARGS, info: {...INFO, version: "1.2.3-beta"}})).toEqual({error: "VERSION_NOT_WINDOWS"});
+  });
+
+  function goodWinBundle() {
+    const options = winPackagerOptions(ARGS).options as WinOptions;
+    const file = (rel: string): Entry => ({rel, kind: "file", mode: 0o666});
+    const dir = (rel: string): Entry => ({rel, kind: "dir"});
+    const listing: Entry[] = [file("Clave Agent Internal.exe"), file("clave-reader.exe"), file("ffmpeg.dll"), dir("locales"), file("locales/en-US.pak"), dir("resources"),
+      file("resources/app.asar"), file("resources/LICENSE"), file("resources/LICENSES.chromium.html"), dir("resources/app.asar.unpacked")];
+    const asarFiles = ["/package.json", "/dist/main.cjs", "/dist/preload.cjs", "/dist/model-host.mjs", "/dist/renderer/index.html", "/dist/renderer/main.js", "/dist/WHAT-LEAVES.md", "/dist/THIRD-PARTY-LICENSES.txt"];
+    const unpacked: Entry[] = [dir("node_modules"), dir("node_modules/node-llama-cpp"), file("node_modules/node-llama-cpp/dist/index.js"), dir("node_modules/@node-llama-cpp"),
+      dir("node_modules/@node-llama-cpp/win-x64"), file("node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node"),
+      dir("node_modules/@node-llama-cpp/win-x64-vulkan"), file("node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll"),
+      dir("node_modules/@reflink"), file("node_modules/@reflink/reflink-win32-x64-msvc/reflink.win32-x64-msvc.node")];
+    return {listing, versionInfo: {...expectedVersionInfo(options), FileVersion: "0.1.0.0"}, asarFiles, unpacked, options};
+  }
+
+  it("passes an app folder with everything in its place", () => {
+    expect(WIN_UNPACKED_ROOTS).toEqual(["node_modules/node-llama-cpp", "node_modules/@node-llama-cpp/win-x64", "node_modules/@node-llama-cpp/win-x64-vulkan"]);
+    expect(checkWinBundle(goodWinBundle())).toEqual([]);
+  });
+
+  it("names each defect, the exe's own name first among them", () => {
+    const g = goodWinBundle();
+    const codes = (b: ReturnType<typeof goodWinBundle>) => checkWinBundle(b).map((p) => p.code);
+    // The Windows reader names this app's window by its FileDescription, and the app excludes itself by that name.
+    expect(codes({...g, versionInfo: {...g.versionInfo, FileDescription: "Electron"}})).toContain("VERSION_INFO_WRONG");
+    expect(codes({...g, versionInfo: {...g.versionInfo, CompanyName: "GitHub, Inc."}})).toContain("VERSION_INFO_WRONG");
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "clave-reader.exe")})).toContain("HELPER_MISSING");
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "Clave Agent Internal.exe")})).toContain("EXECUTABLE_MISSING");
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "resources/LICENSE")})).toContain("BUNDLE_FILE_MISSING");
+    expect(codes({...g, listing: [...g.listing, {rel: "resources/app", kind: "dir"}]})).toContain("UNPACKED_APP_FOLDER");
+    expect(codes({...g, listing: [...g.listing, {rel: "resources/link", kind: "symlink"}]})).toContain("SYMLINK_IN_BUNDLE");
+    expect(codes({...g, listing: [...g.listing, {rel: "clave-reader.pdb", kind: "file", mode: 0o666}]})).toContain("FORBIDDEN_FILE");
+    expect(codes({...g, asarFiles: [...g.asarFiles, "/dist/native/clave-reader.exe"]})).toContain("ASAR_FORBIDDEN_FILE");
+    expect(codes({...g, unpacked: g.unpacked.filter((e) => e.rel !== "node_modules/@node-llama-cpp/win-x64-vulkan")})).toContain("UNPACKED_ROOT_MISSING");
+    expect(codes({...g, unpacked: [...g.unpacked, {rel: "node_modules/chalk/index.js", kind: "file", mode: 0o666}]})).toContain("UNPACKED_STRAY_FILE");
+  });
+});
+
 describe("a real bundle, when one exists", () => {
   const outDir = join(fileURLToPath(new URL("../..", import.meta.url)), "out");
   const reports = existsSync(outDir) ? readdirSync(outDir).map((f) => join(outDir, f, "bundle", "bundle-report.json")).filter((p) => existsSync(p)) : [];
   it.each(reports.length > 0 ? reports : [])("%s passes checkBundle from disk", async (reportPath) => {
-    const report = JSON.parse(readFileSync(reportPath, "utf8")) as {flavour: string; appName: string; version: string; buildNumber: string; electronVersion: string; appPath: string};
+    const report = JSON.parse(readFileSync(reportPath, "utf8")) as {flavour: string; platform?: string; appName: string; version: string; buildNumber: string; electronVersion: string; appPath: string};
     const appPath = join(outDir, report.appPath);
     expect(existsSync(appPath)).toBe(true);
     const info = {flavour: report.flavour, appName: report.appName, version: report.version, buildNumber: report.buildNumber};
-    const options = packagerOptions({flavour: report.flavour, info, stagingDir: join(outDir, report.flavour, "staging"), outDir: join(outDir, report.flavour, "bundle"), electronVersion: report.electronVersion, entity: "Clave"}).options as Options;
     const req = createRequire(import.meta.url);
-    const asar = await import(createRequire(req.resolve("@electron/packager")).resolve("@electron/asar")) as {listPackage: (p: string, o: {isPack: boolean}) => string[]};
+    const loadAsar = async () => await import(pathToFileURL(createRequire(req.resolve("@electron/packager")).resolve("@electron/asar")).href) as {listPackage: (p: string, o: {isPack: boolean}) => string[]};
+    if (report.platform === "win32") {
+      const options = winPackagerOptions({flavour: report.flavour, info, stagingDir: join(outDir, report.flavour, "staging"), outDir: join(outDir, report.flavour, "bundle"), electronVersion: report.electronVersion, entity: "Clave"}).options as WinOptions;
+      const asar = await loadAsar();
+      const unpackedPath = join(appPath, "resources", "app.asar.unpacked");
+      const versionInfo = await versionInfoOf(join(appPath, `${report.appName}.exe`));
+      expect(checkWinBundle({
+        listing: walk(appPath), versionInfo,
+        asarFiles: asar.listPackage(join(appPath, "resources", "app.asar"), {isPack: false}).map((f) => f.split("\\").join("/")),
+        unpacked: existsSync(unpackedPath) ? walk(unpackedPath) : [], options
+      })).toEqual([]);
+      // Literal values of the built exe, not derived from the function that asked for them.
+      expect(versionInfo).toMatchObject({FileDescription: report.appName, ProductName: report.appName, CompanyName: "Clave"});
+      const signed = (JSON.parse(readFileSync(reportPath, "utf8")) as {signed?: boolean}).signed === true;
+      if (!signed) expect(readFileSync(join(appPath, "clave-reader.exe")).equals(readFileSync(join(outDir, report.flavour, "staging", "helper", "clave-reader.exe")))).toBe(true);
+      return;
+    }
+    const options = packagerOptions({flavour: report.flavour, info, stagingDir: join(outDir, report.flavour, "staging"), outDir: join(outDir, report.flavour, "bundle"), electronVersion: report.electronVersion, entity: "Clave"}).options as Options;
+    const asar = await loadAsar();
     const listing = walk(appPath).map((e) => ({...e, mode: e.kind === "file" ? statSync(join(appPath, e.rel)).mode : 0}));
     const unpackedPath = join(appPath, "Contents/Resources/app.asar.unpacked");
     const problems = checkBundle({
