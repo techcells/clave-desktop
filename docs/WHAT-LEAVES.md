@@ -9,7 +9,7 @@ your Wi-Fi off, or watch its network traffic, and compare.
 1. You switch it on and off yourself. It never runs unless you started it.
 2. It reads the text on your screen. Anything it captures to do that is deleted within seconds.
    Nothing older than an hour exists anywhere, and nothing is stored on disk.
-3. It never looks at the apps and sites you exclude, or at private browser windows it can recognise.
+3. It never reads the apps and sites you exclude, or private browser windows it can recognise.
 4. Nothing reaches your profile until you read it and say yes. It names no one else.
 5. It works with your Wi-Fi off. Only the short statements you approve ever leave.
 
