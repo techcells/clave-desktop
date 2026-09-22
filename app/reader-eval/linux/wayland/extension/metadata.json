@@ -1,0 +1,1 @@
+{"uuid": "focus@clave.test", "name": "Clave focus probe", "description": "Reports the focused window over D-Bus", "shell-version": ["46"]}
