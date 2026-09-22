@@ -17,7 +17,10 @@ use crate::text::Line;
 /// Windows keys the table by executable name, which is what the Windows reader reports as the bundle
 /// id. Edge 153 on Windows 11 was measured on 2026-09-23 at 150% scaling with a fresh profile: the
 /// address row's lowest edge at 68.7 points, the InPrivate badge inside it (55.3 to 64.0), and the
-/// page's first line starting at 93.3. The table carries 68.7 plus 10%, as for the other two.
+/// page's first line starting at 93.3. The table carries 68.7 plus 10%, as for the other two. That
+/// profile's interface was Russian; measured again in English (`--lang=en-US`, over http), the
+/// geometry is the same (address row 68.7, one icon to 71.3, page at 93.3) and the badge still reads
+/// `InPrivate`, which Edge does not translate. So Edge's band holds in either language.
 ///
 /// Chrome 154 on the same machine, measured the same day at 150% scaling with throwaway profiles: the
 /// address row's lowest edge at 71.3 points, the Incognito badge inside it (58.7 to 70.0), and the
