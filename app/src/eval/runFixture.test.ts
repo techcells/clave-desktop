@@ -1,10 +1,11 @@
 import {readdirSync, readFileSync} from "node:fs";
 import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import {createFakeModel} from "../core/testing/fakeModel";
 import {judgeReal, parseFixture, runFixture, type Fixture} from "./runFixture";
 
-const DIR = new URL("../../../eval/fixtures/", import.meta.url).pathname;
+const DIR = fileURLToPath(new URL("../../../eval/fixtures/", import.meta.url));
 const load = (file: string) => JSON.parse(readFileSync(join(DIR, file), "utf8")) as {model: {gate: unknown; statements: unknown | null}};
 const scripted = (file: string) => { const m = load(file).model; return createFakeModel(m.statements === null ? [m.gate] : [m.gate, m.statements]); };
 const files = () => readdirSync(DIR).filter((f) => f.endsWith(".json")).sort();

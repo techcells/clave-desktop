@@ -22,7 +22,7 @@ const app = fileURLToPath(new URL("..", import.meta.url));
 /** Builds one source file to a string, browser platform (copy.ts is renderer code), no output on disk. */
 async function bundle(entry: string, define: Record<string, string>): Promise<string> {
   const result = await build({
-    entryPoints: [new URL(entry, `file://${app}`).pathname],
+    entryPoints: [fileURLToPath(new URL(entry, new URL("..", import.meta.url)))],
     bundle: true, write: false, platform: "browser", format: "esm", logLevel: "silent", define
   });
   return result.outputFiles[0]?.text ?? "";

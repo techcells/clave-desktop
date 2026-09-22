@@ -1,11 +1,12 @@
 import {readdirSync, readFileSync} from "node:fs";
 import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import {createFakeModel} from "../core/testing/fakeModel";
 import type {ModelPort} from "../core/types";
 import {runGate} from "./gate";
 
-const DIR = new URL("../../../eval/fixtures/", import.meta.url).pathname;
+const DIR = fileURLToPath(new URL("../../../eval/fixtures/", import.meta.url));
 const load = (file: string) => ({name: file, value: JSON.parse(readFileSync(join(DIR, file), "utf8")) as {model: {gate: unknown; statements: unknown | null}}});
 const SELF_GATE = {activity_summary: "Rewrote a query.", is_professional: true, user_demonstrated_something: true};
 const SELF_ANSWER = {evidence: [{target_id: "self-test-postgres", statement: "Rewrote a slow reporting query with a grouped join and a composite index after reading the plan."}]};

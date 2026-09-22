@@ -26,7 +26,7 @@ import {walk} from "./walk.mjs";
 export const FLAVOURS = ["dev", "internal", "release"];
 
 /** dist/ files that ship in every flavour. */
-export const DIST_ALWAYS = ["main.cjs", "preload.cjs", "model-host.mjs", "WHAT-LEAVES.md", "build.json"];
+export const DIST_ALWAYS = ["main.cjs", "preload.cjs", "model-host.mjs", "WHAT-LEAVES.md", "build.json", "tray.png"];
 /** dist/ files that ship only where the stub backend runs (dev and internal): the stub's public skills list. */
 export const DIST_STANDINS_ONLY = ["standins-taxonomy.json"];
 /** dist/ files that never ship: the staged-window harness and the plain-Node release gate. */

@@ -420,12 +420,14 @@ describe("what the renderer may import", () => {
     return statSync(path).isDirectory() ? files(path, pattern) : pattern.test(name) && !GUARD.has(path) ? [path] : [];
   });
   const walked = roots.flatMap((root) => files(root, /\.(ts|tsx)$/));
+  /** The walk yields native paths; the expectations below are written with `/`, which Windows does not use. */
+  const endsWith = (file: string, tail: string) => file.replaceAll("\\", "/").endsWith(tail);
 
   it("walks the renderer and the shared surface, tests included, and finds them there", () => {
-    expect(walked.some((f) => f.endsWith("/renderer/main.tsx"))).toBe(true);
-    expect(walked.some((f) => f.endsWith("/renderer/copy.ts"))).toBe(true);
-    expect(walked.some((f) => f.endsWith("/shared/ipc.ts"))).toBe(true);
-    expect(walked.some((f) => f.endsWith("/shared/ipc.test.ts"))).toBe(true);
+    expect(walked.some((f) => endsWith(f, "/renderer/main.tsx"))).toBe(true);
+    expect(walked.some((f) => endsWith(f, "/renderer/copy.ts"))).toBe(true);
+    expect(walked.some((f) => endsWith(f, "/shared/ipc.ts"))).toBe(true);
+    expect(walked.some((f) => endsWith(f, "/shared/ipc.test.ts"))).toBe(true);
     expect(walked.some((f) => GUARD.has(f))).toBe(false);
   });
 
@@ -444,8 +446,8 @@ describe("what the renderer may import", () => {
   const assets = files(fileURLToPath(new URL("../", import.meta.url)), /\.(css|html)$/);
 
   it("walks the renderer's stylesheet and page too", () => {
-    expect(assets.some((f) => f.endsWith("/renderer/styles.css"))).toBe(true);
-    expect(assets.some((f) => f.endsWith("/renderer/index.html"))).toBe(true);
+    expect(assets.some((f) => endsWith(f, "/renderer/styles.css"))).toBe(true);
+    expect(assets.some((f) => endsWith(f, "/renderer/index.html"))).toBe(true);
   });
 
   it.each(assets)("%s fetches nothing from anywhere", (file) => {

@@ -1,5 +1,6 @@
 import {readdirSync, readFileSync} from "node:fs";
 import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import {SCENARIO_IDLE_MS} from "./constants";
 import {createPipeline, DEFAULT_EXCLUDED_SITES, DEFAULT_EXCLUSIONS} from "./index";
@@ -14,7 +15,7 @@ interface Fixture {
   expectReal: {digestMin: number; digestMax: number; allowedTargets: string[]};
 }
 
-const DIR = new URL("../../../eval/fixtures/", import.meta.url).pathname;
+const DIR = fileURLToPath(new URL("../../../eval/fixtures/", import.meta.url));
 const files = readdirSync(DIR).filter((f) => f.endsWith(".json")).sort();
 
 describe("evaluation set (scripted model)", () => {

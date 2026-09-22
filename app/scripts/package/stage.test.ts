@@ -20,7 +20,7 @@ const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest
 };
 
 const COMPLETE = [
-  "main.cjs", "preload.cjs", "model-host.mjs", "WHAT-LEAVES.md", "build.json", "bundled-packages.json", "standins-taxonomy.json",
+  "main.cjs", "preload.cjs", "model-host.mjs", "WHAT-LEAVES.md", "build.json", "tray.png", "bundled-packages.json", "standins-taxonomy.json",
   "renderer/index.html", "renderer/main.js", "renderer/main.css", "renderer/assets/font-abc.woff2",
   "native/clave-reader", "reader-eval.cjs", "eval-gate.mjs"
 ];
@@ -32,7 +32,7 @@ describe("shipList: what from dist/ goes into the asar", () => {
     expect(r.helper).toBe("native/clave-reader");
     expect(r.ship).toEqual([
       "WHAT-LEAVES.md", "build.json", "main.cjs", "model-host.mjs", "preload.cjs",
-      "renderer/assets/font-abc.woff2", "renderer/index.html", "renderer/main.css", "renderer/main.js", "standins-taxonomy.json"
+      "renderer/assets/font-abc.woff2", "renderer/index.html", "renderer/main.css", "renderer/main.js", "standins-taxonomy.json", "tray.png"
     ]);
     expect(r.ship).not.toContain("reader-eval.cjs");
     expect(r.ship).not.toContain("eval-gate.mjs");
