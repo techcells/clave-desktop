@@ -155,13 +155,17 @@ describe("the words for Windows", () => {
     WINDOWS_COPY.permission.title, WINDOWS_COPY.permission.lead, WINDOWS_COPY.checkingOnboarding
   ];
 
-  it("says nothing a Windows user cannot find: no System Settings, Screen Recording, menu bar, Chrome or Safari", () => {
-    for (const line of windowsLines) expect(line).not.toMatch(/System Settings|Screen Recording|menu bar|macOS|Applications|Chrome|Safari/);
+  it("says nothing a Windows user cannot find: no System Settings, Screen Recording, menu bar or Safari", () => {
+    for (const line of windowsLines) expect(line).not.toMatch(/System Settings|Screen Recording|menu bar|macOS|Applications|Safari/);
   });
 
-  it("names the one browser that is measured there, and keeps every other limit as it is", () => {
+  it("names the browsers that are measured there, Chrome only in English, and keeps every other limit as it is", () => {
     expect(privateWindowsLine("windows")).toContain("Microsoft Edge");
     expect(privateWindowsLine("windows")).toContain("InPrivate");
+    expect(privateWindowsLine("windows")).toContain("Google Chrome");
+    expect(privateWindowsLine("windows")).toContain("Incognito");
+    expect(privateWindowsLine("windows")).toContain("English");
+    expect(WINDOWS_COPY.addressLimit).toContain("Google Chrome");
     expect(knownLimits("windows")).toHaveLength(KNOWN_LIMITS.length);
     expect(knownLimits("windows").filter((line) => !KNOWN_LIMITS.includes(line))).toEqual([WINDOWS_COPY.addressLimit]);
   });

@@ -50,15 +50,21 @@ export const BROWSERS = [
  * reader (`app/native/reader/src/toolbar.rs`), never on its own.
  *
  * Keyed by name, and measured per BUNDLE ID, because a band belongs to one browser on one system:
- * "Google Chrome" is measured on macOS (`com.google.Chrome`) and not on Windows (`chrome.exe`), and
- * "Microsoft Edge" the other way round. The ids are exactly the keys of the reader's band table.
+ * "Google Chrome" is measured on macOS (`com.google.Chrome`) and on Windows (`chrome.exe`), and
+ * "Microsoft Edge" only on Windows. The ids are exactly the keys of the reader's band table.
+ *
+ * `chrome.exe` is read only in English. Its badge is matched as the English word "Incognito", so the
+ * Windows reader withholds the strip from a Chrome it cannot show to be English
+ * (`app/native/reader/src/win/chrome.rs`), and `after` refuses a browser read with no strip. That
+ * Chrome is captured and then dropped rather than refused up front, because the language is known
+ * only to the reader.
  *
  * `null` stands for a window that names no bundle id, which only the stand-in reader sends. The two
  * names that were read by name alone before bundle ids mattered keep that; a name measured since is
  * read only with its id, because without one nothing says which system's browser it is.
  */
 export const MEASURED_BROWSERS: Readonly<Record<string, readonly (string | null)[]>> = {
-  "google chrome": ["com.google.Chrome", null],
+  "google chrome": ["com.google.Chrome", null, "chrome.exe"],
   "safari": ["com.apple.Safari", null],
   "microsoft edge": ["msedge.exe"]
 };

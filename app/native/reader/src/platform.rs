@@ -108,4 +108,15 @@ pub trait Platform {
     /// nothing the app could do differently, and an error string from the recogniser is one more
     /// place a fragment of the user's screen could leak into a log.
     fn recognise(&self, captured: &Captured<Self::Image>) -> Result<Vec<Line>, ()>;
+
+    /// Whether the toolbar band measured for this window's bundle id holds for this window.
+    ///
+    /// A band is a height, and the private-window badge inside it is a WORD: the app finds a private
+    /// window by reading that word, so a band measured in one interface language says nothing about a
+    /// browser showing another. `false` withholds the strip altogether, which the app treats as a
+    /// browser it cannot check and never keeps. Every browser but one is measured in the only form
+    /// it has, hence the default; Windows overrides it for Chrome (see `win::chrome`).
+    fn band_holds(&self, _window: &WindowInfo) -> bool {
+        true
+    }
 }

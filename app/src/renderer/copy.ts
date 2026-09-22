@@ -262,9 +262,10 @@ export const WINDOWS_COPY = {
     lead: "This app reads the window in front with Windows' own window capture, which needs Windows 10 version 1903 or later. Windows says it is not available here. It keeps no picture."
   },
   checkingOnboarding: "Waiting for window capture",
-  // Measured on Windows: Edge's toolbar strip (reader: toolbar.rs). Chrome on Windows is not measured.
-  privateWindows: "Microsoft Edge is read, except its InPrivate windows. Other browsers are not read yet.",
-  addressLimit: "In Microsoft Edge it only reads a page while the address is visible."
+  // Measured on Windows: Edge's and Chrome's toolbar strips (reader: toolbar.rs). Chrome only in
+  // English, because its incognito badge is matched as an English word (reader: win/chrome.rs).
+  privateWindows: "Microsoft Edge and Google Chrome are read, except their InPrivate and Incognito windows. Chrome is read only when its language is English. Other browsers are not read yet.",
+  addressLimit: "In Microsoft Edge and Google Chrome it only reads a page while the address is visible."
 } as const;
 
 type CopyPlatform = AppInfo["platform"];

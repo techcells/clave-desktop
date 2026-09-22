@@ -549,8 +549,12 @@ pub fn handle_read<P: Platform>(
     // The strip is cut from the ORDERED lines rather than the kept ones, and deliberately: it is a
     // band of the screen, judged by where a line sat, and a line number that the gutter rules threw
     // out of the text never sat in a browser's toolbar anyway.
-    let strip =
-        toolbar::toolbar_text(&ordered, window.bundle_id.as_deref(), captured.scale, captured.frame.height as f64);
+    //
+    // A band that does not hold for this window (`Platform::band_holds`: Chrome on Windows in a
+    // language other than English) is no band at all, so the strip is withheld and the app refuses
+    // the read as a browser it cannot check.
+    let measured = window.bundle_id.as_deref().filter(|_| platform.band_holds(&window));
+    let strip = toolbar::toolbar_text(&ordered, measured, captured.scale, captured.frame.height as f64);
 
     // 8b — recognition is the longest step of all, so the last word on what is in front is taken
     // after it and before anything is kept or said. On a mismatch the text goes no further: it is
@@ -588,8 +592,7 @@ pub fn handle_read<P: Platform>(
                 })
                 .collect(),
         );
-        geometry.band_px =
-            toolbar::band_px(window.bundle_id.as_deref(), captured.scale).map(|band| band.round() as u64);
+        geometry.band_px = toolbar::band_px(measured, captured.scale).map(|band| band.round() as u64);
     }
     drop(captured);
 
@@ -664,6 +667,8 @@ mod tests {
         cancel_in_recognise: Option<Arc<AtomicBool>>,
         /// Pixels per point of the display the fake's window is on.
         scale: f64,
+        /// What `band_holds` answers: false models Chrome on Windows in a language other than English.
+        band_holds: bool,
     }
 
     impl FakePlatform {
@@ -683,12 +688,19 @@ mod tests {
                 overrun_in_recognise: None,
                 cancel_in_recognise: None,
                 scale: 1.0,
+                band_holds: true,
             }
         }
 
         /// The display's pixel-per-point ratio, for the tests about the toolbar band.
         fn scale(mut self, scale: f64) -> Self {
             self.scale = scale;
+            self
+        }
+
+        /// A window whose measured band does not hold for it.
+        fn band_withheld(mut self) -> Self {
+            self.band_holds = false;
             self
         }
 
@@ -774,6 +786,10 @@ mod tests {
                 switch.store(true, Ordering::SeqCst);
             }
             answer
+        }
+
+        fn band_holds(&self, _window: &WindowInfo) -> bool {
+            self.band_holds
         }
     }
 
@@ -1591,6 +1607,20 @@ mod tests {
         let (_, text, toolbar) = ok_of(read(&fake).0);
         assert_eq!(text, "example.com/path\npage body");
         assert_eq!(toolbar.as_deref(), Some("example.com/path"));
+    }
+
+    #[test]
+    fn a_browser_whose_band_does_not_hold_gets_no_strip_at_all() {
+        // Chrome on Windows in Russian: the band's height is right, but its badge is a word the app
+        // cannot match. `None` rather than "", because "" is a strip the app would go on to judge.
+        let fake = FakePlatform::new()
+            .window(Some(window(11, Some(CHROME))))
+            .lines(vec![line("OKHO B pexvwe VIHKorHVITO", 0.8, 55.0, 70.0), line("page body", 0.1, 300.0, 316.0)])
+            .band_withheld();
+        let (_, _, toolbar) = ok_of(read(&fake).0);
+        assert_eq!(toolbar, None);
+        let fake = FakePlatform::new().window(Some(window(11, Some(CHROME)))).band_withheld();
+        assert_eq!(read_measuring(&fake).1.band_px, None, "no band was judged against");
     }
 
     #[test]

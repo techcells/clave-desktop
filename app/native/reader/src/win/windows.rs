@@ -212,7 +212,7 @@ fn program_of_window(hwnd: HWND) -> Option<Program> {
     Some(uwp_child_pid(hwnd, pid).and_then(program_of_pid).unwrap_or(program))
 }
 
-fn pid_of(hwnd: HWND) -> Option<u32> {
+pub fn pid_of(hwnd: HWND) -> Option<u32> {
     let mut pid = 0u32;
     // SAFETY: the out-pointer is valid for the call.
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
@@ -261,7 +261,7 @@ fn program_of_pid(pid: u32) -> Option<Program> {
 
 /// The full path of a process's executable. Limited-information access is enough and is granted
 /// for other users' and elevated processes too; a process we still cannot open is simply unnamed.
-fn image_path(pid: u32) -> Option<String> {
+pub fn image_path(pid: u32) -> Option<String> {
     // SAFETY: the handle is closed on every path; the buffer outlives the call that fills it.
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;

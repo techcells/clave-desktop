@@ -36,17 +36,21 @@ describe("before capture", () => {
 
   it("reads a browser only where its band was measured: by name AND by the bundle id the reader gives", () => {
     const x = createExclusions({exclusions: [], excludedSites: []});
-    // Measured: Chrome and Safari on macOS, Edge on Windows.
+    // Measured: Chrome and Safari on macOS, Edge and Chrome on Windows.
     expect(x.before({app: "Google Chrome", bundleId: "com.google.Chrome", title: "Docs"})).toBeNull();
     expect(x.before({app: "Safari", bundleId: "com.apple.Safari", title: "Docs"})).toBeNull();
     expect(x.before({app: "Microsoft Edge", bundleId: "msedge.exe", title: "Docs"})).toBeNull();
+    expect(x.before({app: "Google Chrome", bundleId: "chrome.exe", title: "Docs"})).toBeNull();
     // The same names elsewhere are not measured, and are refused before anything is captured.
-    expect(x.before({app: "Google Chrome", bundleId: "chrome.exe", title: "Docs"})).toBe("excludedApp");
     expect(x.before({app: "Microsoft Edge", bundleId: "com.microsoft.edgemac", title: "Docs"})).toBe("excludedApp");
     // Unmeasured browsers stay refused.
     expect(x.before({app: "Brave Browser", bundleId: "brave.exe", title: "Docs"})).toBe("excludedApp");
-    // After the read, an unmeasured Windows Chrome has no strip and is never kept either.
-    expect(x.after({app: "Google Chrome", bundleId: "chrome.exe", title: "Docs"}, undefined)).toBe("unknownWindow");
+    // Windows Chrome with its strip is read, and its incognito window is not.
+    const chrome = {app: "Google Chrome", bundleId: "chrome.exe", title: "CLAVE-BAND probe"};
+    expect(x.after(chrome, "127.0.0.1:8765/probe.html")).toBeNull();
+    expect(x.after(chrome, "127.0.0.1:8765/probe.html\nIncognito")).toBe("privateWindow");
+    // A Chrome the reader could not show to be English comes with no strip, and is never kept.
+    expect(x.after(chrome, undefined)).toBe("unknownWindow");
   });
 
   it("denies every name in a selfApp list, such as an unpackaged run's \"Electron\", and only those", () => {
