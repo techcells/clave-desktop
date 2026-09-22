@@ -93,6 +93,9 @@ jobs:
       - name: Install dependencies
         run: |
           pnpm --dir app install --frozen-lockfile
+          # pnpm skips Electron's install script (not in allowBuilds); run it so node_modules/electron/dist
+          # exists: the licence step copies its LICENSE files from there.
+          node app/node_modules/electron/install.js
           # build:native and the licence step run cargo --offline: fetch the locked crates first.
           cargo fetch --locked --manifest-path app/native/reader/Cargo.toml
 
