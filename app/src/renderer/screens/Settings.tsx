@@ -1,6 +1,6 @@
 import type {ReactNode} from "react";
 import {useEffect, useState} from "react";
-import type {SettingsProblem} from "../../shared/ipc";
+import type {EngineStatus, SettingsProblem} from "../../shared/ipc";
 import {clave, useAsked} from "../bridge";
 import {Button, Field, Submit, useAction, useHeading} from "../components/Controls";
 import {EntryList} from "../components/EntryList";
@@ -85,6 +85,9 @@ export function Settings({shell}: {shell: Shell}): ReactNode {
       <div>
         <hr className="divider" />
         <p className="label">{COPY.settings.account}</p>
+        <Account account={shell.status.account} />
+        {/* No navigation here: the status that comes back is signed out, and the window turns into
+            the sign-in by itself (App.tsx), the same way it does when the server signs the user out. */}
         <p className="actions"><Button label={COPY.settings.signOut} press={() => clave.signOut().then(shell.askStatus)} /></p>
       </div>
 
@@ -106,6 +109,18 @@ export function Settings({shell}: {shell: Shell}): ReactNode {
         {licencesMissing ? <p className="note">{COPY.settings.licencesMissing}</p> : null}
       </div>
     </div>
+  );
+}
+
+/** Who is signed in, so the user knows which account their evidence goes to. Only the parts the account has. */
+function Account({account}: {account: EngineStatus["account"]}): ReactNode {
+  if (account === null) return <p className="note">{COPY.settings.accountUnknown}</p>;
+  return (
+    <dl className="facts">
+      {account.fullName !== null ? <div><dt>{COPY.settings.name}</dt><dd>{account.fullName}</dd></div> : null}
+      {account.handle !== null ? <div><dt>{COPY.settings.handle}</dt><dd>@{account.handle}</dd></div> : null}
+      {account.email !== null ? <div><dt>{COPY.settings.email}</dt><dd>{account.email}</dd></div> : null}
+    </dl>
   );
 }
 

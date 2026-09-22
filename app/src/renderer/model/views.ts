@@ -43,6 +43,15 @@ export const startScreen = (status: EngineStatus, settings: UserSettings): Scree
   (settings.onboardingStep < STEPS.length ? "onboarding" : status.pending > 0 ? "review" : "home");
 
 /**
+ * A user who finished onboarding and is now signed out — by the Sign out button, or by the server
+ * refusing their session. Nothing in the app is any use to them then: evidence is made for an account,
+ * so the window becomes the sign-in and nothing else (no tabs, no way round it) until they are back.
+ * Before onboarding is over, the sign-in is simply its own step (`onboardingStep`).
+ */
+export const mustSignIn = (status: EngineStatus, settings: UserSettings): boolean =>
+  settings.onboardingStep >= STEPS.length && status.blockers.includes("SIGNED_OUT");
+
+/**
  * Whether the app runs from macOS's translocation folder (main decides, from its own path; the
  * field is optional on the wire so an older main means "no"). Only an exact `true` counts.
  */

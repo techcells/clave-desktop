@@ -57,8 +57,11 @@ function Pitch({shell}: {shell: Shell}): ReactNode {
   );
 }
 
-/** Step 2. Signing in is machine-checked: a success clears SIGNED_OUT and the step moves itself on. */
-function SignIn({shell}: {shell: Shell}): ReactNode {
+/**
+ * Step 2. Signing in is machine-checked: a success clears SIGNED_OUT and the step moves itself on.
+ * Also the whole window for a finished user who has been signed out (App.tsx), with `lead` saying why.
+ */
+export function SignIn({shell, lead}: {shell: Shell; lead?: string}): ReactNode {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
@@ -107,6 +110,7 @@ function SignIn({shell}: {shell: Shell}): ReactNode {
   return (
     <>
       <h1 className="title" tabIndex={-1} ref={heading}>{COPY.onboarding.signIn}</h1>
+      {lead !== undefined ? <p className="warn">{lead}</p> : null}
       <form onSubmit={(event) => { event.preventDefault(); run(submit); }}>
         <Field label={COPY.onboarding.identifier}>
           {(id) => <input id={id} className="input" type="text" inputMode="email" autoComplete="username" spellCheck={false} value={identifier} onChange={(e) => setIdentifier(e.target.value)} />}

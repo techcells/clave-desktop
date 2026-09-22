@@ -1,4 +1,4 @@
-import {ApiError, type ApiErrorCode, type ApprovedStatement, type ClaveApi, type Session, type Taxonomy} from "../ports/claveApi";
+import {ApiError, type Account, type ApiErrorCode, type ApprovedStatement, type ClaveApi, type Session, type Taxonomy} from "../ports/claveApi";
 
 export interface FakeApi extends ClaveApi {
   /** Set to make the next calls fail with this code; `null` to succeed again. */
@@ -7,6 +7,8 @@ export interface FakeApi extends ClaveApi {
   failQueue: ApiErrorCode[];
   taxonomyValue: Taxonomy;
   names: string[];
+  /** Who the profile says is signed in; `null` answers like a server from before it said so. */
+  account: Account | null;
   submitted: ApprovedStatement[][];
   /** The PKCE verifiers handed to `exchangeOAuthAttempt`, in order. */
   verifiers: string[];
@@ -30,7 +32,7 @@ export function createFakeApi(now: () => number): FakeApi {
   };
   const session = (api: FakeApi, userId: string): Session => ({token: `token-${++api.tokenCounter}`, expiresAt: now() + 7 * 24 * 60 * 60_000, userId});
   const api: FakeApi = {
-    failWith: null, failQueue: [], taxonomyValue: TAXONOMY_V1, names: ["Sardor Astanov"], submitted: [], verifiers: [], calls: [], tokenCounter: 0,
+    failWith: null, failQueue: [], taxonomyValue: TAXONOMY_V1, names: ["Sardor Astanov"], account: {fullName: "Sardor Astanov", handle: "sardor", email: "sardor@example.com"}, submitted: [], verifiers: [], calls: [], tokenCounter: 0,
     async signIn(identifier, password) {
       api.calls.push("signIn"); fail(api);
       if (password !== "correct") throw new ApiError("BAD_CREDENTIALS");
@@ -43,7 +45,7 @@ export function createFakeApi(now: () => number): FakeApi {
       return session(api, "user:google");
     },
     async refresh(old) { api.calls.push("refresh"); fail(api); return session(api, old.userId); },
-    async profile() { api.calls.push("profile"); fail(api); return {names: api.names}; },
+    async profile() { api.calls.push("profile"); fail(api); return {names: api.names, ...api.account}; },
     async taxonomy(_session, knownVersion) {
       api.calls.push("taxonomy"); fail(api);
       return knownVersion === api.taxonomyValue.version ? "unchanged" : api.taxonomyValue;

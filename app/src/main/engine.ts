@@ -11,7 +11,7 @@ import type {ReaderClientEvent} from "./reader/readerClient";
 import type {ModelClient} from "./model/client";
 import type {Downloader} from "./model/download";
 import {runSelfTest, selfTestKey, type SelfTestResult} from "./model/selfTest";
-import type {ApprovedStatement, ClaveApi} from "./ports/claveApi";
+import type {Account, ApprovedStatement, ClaveApi} from "./ports/claveApi";
 import {parsePermission, type Permission, type Reader} from "./ports/reader";
 import {isStandIn} from "./ports/standIn";
 import type {Cipher, FileSystem, Now} from "./ports/system";
@@ -62,6 +62,8 @@ export interface EngineStatus {
    * used to be `NO_PERMISSION`, which told every user at every launch that their grant was gone.
    */
   checkingPermission: boolean;
+  /** Who is signed in, for the settings screen. `null` when nobody is, or while an older session is still being asked. */
+  account: Account | null;
 }
 
 /**
@@ -336,7 +338,8 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       // Only ever set while the loop is running: the loop retracts it on its way out, so there is no
       // second place that has to remember to.
       nothingRead,
-      checkingPermission: checkingPermission()
+      checkingPermission: checkingPermission(),
+      account: session.account()
     };
   }
   const emit = () => {

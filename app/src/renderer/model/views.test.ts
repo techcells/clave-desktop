@@ -5,9 +5,9 @@ import {describe, expect, it} from "vitest";
 import type {EngineStatus, NothingReadWhy, UserSettings} from "../../shared/ipc";
 import {NOTHING_READ_WHY} from "../../shared/ipc";
 import {APP_FILE, BLOCKERS, CLAIMS, COPY, KNOWN_LIMITS, NOTHING_READ, PERMISSION_STEPS} from "../copy";
-import {downloadView, firstBlocker, gigabytes, isTranslocated, LONG_WAIT_MS, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
+import {downloadView, firstBlocker, gigabytes, isTranslocated, LONG_WAIT_MS, mustSignIn, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
 
-const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus => ({capture: "off", resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false});
+const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus => ({capture: "off", resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false, account: null});
 const settings = (onboardingStep: number): UserSettings => ({exclusions: [], excludedSites: [], reviewTime: "17:30", captureOn: false, onboardingStep});
 
 describe("the pitch", () => {
@@ -79,6 +79,15 @@ describe("onboarding", () => {
   it("goes back to a machine-checked step when something was undone, however far the user had come", () => {
     expect(onboardingStep(status(["SIGNED_OUT"]), settings(7))).toBe("signIn");
     expect(onboardingStep(status(["NO_PERMISSION"]), settings(7))).toBe("permission");
+  });
+
+  it("turns the whole window into the sign-in for a finished user who is signed out, and only then", () => {
+    expect(mustSignIn(status(["SIGNED_OUT"]), settings(7))).toBe(true);
+    expect(mustSignIn(status(["NO_PERMISSION", "SIGNED_OUT"]), settings(7))).toBe(true);
+    // Still in onboarding: the sign-in is its own step there, with the step count above it.
+    expect(mustSignIn(status(["SIGNED_OUT"]), settings(1))).toBe(false);
+    expect(mustSignIn(status(["SIGNED_OUT"]), settings(6))).toBe(false);
+    expect(mustSignIn(status(["NO_PERMISSION"]), settings(7))).toBe(false);
   });
 
   it("leaves a finished user on the home screen when the problem is not an onboarding step", () => {

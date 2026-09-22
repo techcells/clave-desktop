@@ -19,14 +19,14 @@ export type Scenario =
   | "onboarding-neverread" | "onboarding-reviewtime" | "onboarding-done"
   | "home-on" | "home-off" | "home-problem" | "home-checking"
   | "home-nothing-notallowed" | "home-nothing-nowindow" | "home-nothing-other"
-  | "review" | "review-empty" | "settings";
+  | "review" | "review-empty" | "settings" | "signed-out";
 
 export const SCENARIOS: readonly Scenario[] = [
   "onboarding-pitch", "onboarding-signin", "onboarding-model", "onboarding-permission", "onboarding-translocated",
   "onboarding-neverread", "onboarding-reviewtime", "onboarding-done",
   "home-on", "home-off", "home-problem", "home-checking",
   "home-nothing-notallowed", "home-nothing-nowindow", "home-nothing-other",
-  "review", "review-empty", "settings"
+  "review", "review-empty", "settings", "signed-out"
 ];
 
 export const isScenario = (value: string | null): value is Scenario =>
@@ -68,8 +68,13 @@ const SENT = [
 
 interface Start { status: EngineStatus; settings: UserSettings; download: DownloadState; permission: Permission; review: ReviewView }
 
-const status = (over: Partial<EngineStatus> = {}): EngineStatus =>
-  ({capture: "off", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, checkingPermission: false, ...over});
+const ACCOUNT = {fullName: "Sardor Astanov", handle: "sardor", email: "sardor@example.com"};
+
+/** Signed in, and so with an account, unless the scenario's blockers say otherwise. */
+const status = (over: Partial<EngineStatus> = {}): EngineStatus => ({
+  capture: "off", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, checkingPermission: false,
+  account: over.blockers?.includes("SIGNED_OUT") ? null : ACCOUNT, ...over
+});
 
 const settings = (over: Partial<UserSettings> = {}): UserSettings => ({
   exclusions: ["1Password", "Messages", "Mail", "Calendar"],
@@ -136,6 +141,9 @@ export function scenarioStart(scenario: Scenario): Start {
       return {...base, status: status({capture: "on"}), settings: settings(), review: nothing};
     case "settings":
       return {...base, status: status(), settings: settings()};
+    // Onboarding long finished, then signed out: the window is nothing but the sign-in until it is undone.
+    case "signed-out":
+      return {...base, status: status({blockers: ["SIGNED_OUT"]}), settings: settings()};
   }
 }
 
@@ -214,12 +222,12 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
     pauseForAnHour: async () => { pushStatus({capture: "pausedByUser", resumeAt: Date.now() + 3600_000}); },
     signIn: async (identifier, password): Promise<SignInResult> => {
       if (identifier.length === 0 || password.length === 0) return {ok: false, code: "BAD_CREDENTIALS"};
-      pushStatus({blockers: without("SIGNED_OUT")});
+      pushStatus({blockers: without("SIGNED_OUT"), account: ACCOUNT});
       return {ok: true};
     },
-    signInWithGoogle: async (): Promise<SignInResult> => { pushStatus({blockers: without("SIGNED_OUT")}); return {ok: true}; },
+    signInWithGoogle: async (): Promise<SignInResult> => { pushStatus({blockers: without("SIGNED_OUT"), account: ACCOUNT}); return {ok: true}; },
     cancelGoogleSignIn: async () => undefined,
-    signOut: async () => { pushStatus({capture: "off", blockers: [...engine.blockers, "SIGNED_OUT"]}); },
+    signOut: async () => { pushStatus({capture: "off", blockers: [...engine.blockers, "SIGNED_OUT"], account: null}); },
     settings: async () => stored,
     settingsOpened: async () => { pushStatus({blockers: without("SETTINGS_NEED_REVIEW")}); },
     updateSettings: async (patch: UserSettingsPatch) => {

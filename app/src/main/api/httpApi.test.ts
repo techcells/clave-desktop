@@ -152,6 +152,12 @@ describe("http clave-back client", () => {
     expect(seen[0]).toMatchObject({url: "https://api.test/api/agent/profile", method: "GET", headers: {Authorization: `Bearer ${SESSION.token}`}});
   });
 
+  it("reads who is signed in from the profile, and a null part as null", async () => {
+    const body = {names: ["Sardor"], fullName: "Sardor Astanov", handle: "sardor", email: null};
+    expect(await api([{body: ok(body)}]).api.profile(SESSION)).toEqual(body);
+    expect(await codeOfRejection(api([{body: ok({names: [], email: 42})}]).api.profile(SESSION))).toBe("BAD_RESPONSE");
+  });
+
   it("asks for the taxonomy with the known version, and understands both answers", async () => {
     const full = {version: "v2", unchanged: false, skills: [{id: "s1", displayName: "PostgreSQL", canonicalName: "postgresql", aliases: ["Postgres"]}], competencies: [{id: "c1", name: "Problem Solving", description: ""}]};
     const {api: a, seen} = api([{body: ok({version: "v1", unchanged: true})}, {body: ok(full)}, {body: ok({version: "v3", unchanged: false, skills: [{id: "s1"}], competencies: []})}, {body: ok({version: "", unchanged: true})}]);

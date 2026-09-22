@@ -1,5 +1,5 @@
 import {SESSION_REFRESH_BEFORE_MS, SESSION_REFRESH_RETRY_MS} from "../constants";
-import {ApiError, apiCodeOf, parseSession, type ApiErrorCode, type ClaveApi, type Session} from "../ports/claveApi";
+import {accountOf, ApiError, apiCodeOf, parseSession, type Account, type ApiErrorCode, type ClaveApi, type Session} from "../ports/claveApi";
 import type {Cipher, FileSystem, Now} from "../ports/system";
 import {createJsonFile, StorageError} from "../storage/jsonFile";
 
@@ -11,6 +11,8 @@ export interface SessionStore {
   userId(): string | null;
   /** The user's own names, which the guard forbids in statements. Empty until known. */
   names(): string[];
+  /** Who is signed in, for the settings screen. `null` when signed out, and until an older stored session has been asked. */
+  account(): Account | null;
   signIn(identifier: string, password: string): Promise<SignInResult>;
   /** The same as `signIn`, for a session obtained some other way (a browser sign-in's attempt exchange). */
   signInWith(getSession: () => Promise<Session>): Promise<SignInResult>;
@@ -32,12 +34,20 @@ export interface SessionStore {
   onChange(cb: (signedIn: boolean) => void): () => void;
 }
 
-interface Stored { session: Session; names: string[] }
+/** `account` is absent from a file written before the app showed who is signed in; `restore` asks for it once. */
+interface Stored { session: Session; names: string[]; account?: Account }
+const part = (value: unknown): value is string | null => value === null || typeof value === "string";
+const parseAccount = (value: unknown): Account | undefined => {
+  const v = value as Partial<Record<keyof Account, unknown>> | null | undefined;
+  if (!v || !part(v.fullName) || !part(v.handle) || !part(v.email)) return undefined;
+  return {fullName: v.fullName, handle: v.handle, email: v.email};
+};
 const parseStored = (value: unknown): Stored | null => {
-  const v = value as {session?: unknown; names?: unknown} | null;
+  const v = value as {session?: unknown; names?: unknown; account?: unknown} | null;
   const session = parseSession(v?.session);
   if (!session || !Array.isArray(v?.names) || !v.names.every((n) => typeof n === "string")) return null;
-  return {session, names: v.names as string[]};
+  const account = parseAccount(v.account);
+  return account ? {session, names: v.names as string[], account} : {session, names: v.names as string[]};
 };
 
 export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher: Cipher; path: string; now: Now; onUnreadable?: () => void}): SessionStore {
@@ -98,7 +108,7 @@ export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher:
     const current = stored as Stored;
     const session = await api.refresh(current.session);
     if (onStale?.()) throw new StaleRefresh();
-    await set({session, names: current.names});
+    await set({...current, session});
     return session;
   }
 
@@ -112,10 +122,31 @@ export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher:
     return inFlightRefresh;
   }
 
+  /**
+   * A session stored by a build from before the app showed who is signed in has no account: ask the
+   * server once, in the background. Written straight to the file rather than through `set`, which
+   * would reset the token's measured lifetime. A failure leaves it unknown until the next launch.
+   */
+  async function fillAccount(): Promise<void> {
+    const current = stored;
+    if (!current || current.account) return;
+    const gen = generation;
+    try {
+      const profile = await api.profile(current.session);
+      if (generation !== gen || stored !== current) return;
+      const next: Stored = {...current, names: profile.names, account: accountOf(profile)};
+      await file.save(next);
+      if (generation !== gen || stored !== current) return;
+      stored = next;
+      emit();
+    } catch { /* stays unknown; asked again at the next launch */ }
+  }
+
   const store: SessionStore = {
     current: () => stored?.session ?? null,
     userId: () => stored?.session.userId ?? null,
     names: () => stored?.names ?? [],
+    account: () => stored?.account ?? null,
     signIn: (identifier, password) => store.signInWith(() => api.signIn(identifier, password)),
     async signInWith(getSession) {
       // FIRST, before any await: from here on, a refresh that was already in flight belongs to an
@@ -125,8 +156,8 @@ export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher:
       await removeStored();
       try {
         const session = await getSession();
-        const {names} = await api.profile(session);
-        await set({session, names});
+        const profile = await api.profile(session);
+        await set({session, names: profile.names, account: accountOf(profile)});
         return {ok: true};
       } catch (error) {
         if (error instanceof StorageError) return {ok: false, code: error.code};
@@ -144,10 +175,10 @@ export function createSessionStore(deps: {api: ClaveApi; fs: FileSystem; cipher:
       if (generation !== gen) return;
       stored = loaded;
       if (!stored) return;
-      if (stored.session.expiresAt - now() > SESSION_REFRESH_BEFORE_MS) { emit(); return; }
+      if (stored.session.expiresAt - now() > SESSION_REFRESH_BEFORE_MS) { emit(); void fillAccount(); return; }
       // The same shared refresh withSession uses: a restore and a call racing at launch must not
       // each ask the server for a new token.
-      try { await refreshShared(); emit(); }
+      try { await refreshShared(); emit(); void fillAccount(); }
       catch (error) {
         // A refresh belonging to an identity this store has since left behind says nothing about
         // the current one: whoever bumped the generation already decided what is signed in. `emit`

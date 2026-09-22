@@ -8,9 +8,9 @@ import {Frame, NameSpine, StepSpine, Tabs} from "./components/Frame";
 import {COPY} from "./copy";
 import {parseRoute, routeHash} from "./model/route";
 import type {Screen, Step} from "./model/views";
-import {firstBlocker, onboardingStep, startScreen, STEPS} from "./model/views";
+import {firstBlocker, mustSignIn, onboardingStep, startScreen, STEPS} from "./model/views";
 import {Home} from "./screens/Home";
-import {Onboarding} from "./screens/Onboarding";
+import {Onboarding, SignIn} from "./screens/Onboarding";
 import {Review} from "./screens/Review";
 import {Settings} from "./screens/Settings";
 import type {Shell} from "./shell";
@@ -72,6 +72,16 @@ export function App(): ReactNode {
     if (settledForcedStep) go("home");
   }, [settledForcedStep, go]);
 
+  /**
+   * Signed out after onboarding: the window is the sign-in and nothing else (`mustSignIn`). The hash
+   * is put back to home meanwhile, so signing in lands there and not on whatever screen was open when
+   * the sign-out happened — Settings, most often, since that is where the button is.
+   */
+  const gated = status !== null && settings !== null && mustSignIn(status, settings);
+  useEffect(() => {
+    if (gated) go("home");
+  }, [gated, go]);
+
   if (status === null || settings === null || appInfo === null) {
     /**
      * Nothing has arrived yet. Either main has not answered (the blank page is right for the one
@@ -90,6 +100,14 @@ export function App(): ReactNode {
   const shell: Shell = {status, settings, appInfo, askStatus, askSettings, go, save};
   const step: Step = forcedStep ?? onboardingStep(status, settings);
   const tone: Tone = firstBlocker(status) !== null ? "problem" : status.capture === "on" ? "on" : "off";
+
+  if (gated) {
+    return (
+      <Frame spine={<NameSpine name={COPY.onboarding.signIn} />} tone={tone} announce={COPY.tray.off} tabs={null}>
+        <div className="enter"><SignIn shell={shell} lead={COPY.onboarding.signedOut} /></div>
+      </Frame>
+    );
+  }
 
   return (
     <Frame

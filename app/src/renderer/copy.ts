@@ -194,6 +194,8 @@ export const COPY = {
     step: (n: number, of: number) => `Step ${n} of ${of}`,
     pitch: "How this works",
     signIn: "Sign in", identifier: "Email or handle", password: "Password",
+    /** Under the heading when a finished user has been signed out: the window offers nothing else until they sign back in. */
+    signedOut: "You are signed out. Clave only works for a signed-in account, because every statement it writes belongs to someone.",
     /** The browser path. The app never sees the Google password: the browser and Clave handle it, and the app gets a one-time code back. */
     signInWithGoogle: "Sign in with Google", or: "or",
     waitingForBrowser: "Finish signing in through your browser. This window will update by itself.",
@@ -214,6 +216,9 @@ export const COPY = {
   settings: {addCurrent: (app: string) => `Exclude ${app}`, deleteAll: "Delete all local data", alsoModel: "Also remove the model", signOut: "Sign out",
     title: "Settings", apps: "Excluded apps", sites: "Excluded sites", addApp: "Name of an app", addSite: "A site, like example.com",
     reviewTime: "Review time", account: "Account", localData: "Local data", about: "About",
+    name: "Name", handle: "Handle", email: "Email",
+    /** Signed in with a session from an older build whose details have not been fetched yet (offline, most likely). */
+    accountUnknown: "Signed in. Your name and email will show once the app reaches Clave.",
     version: "Version", modelHash: "Model",
     licences: "Third-party licences", licencesMissing: "The licence file is not part of this build.",
     /** The internal flavour's one permanent line (packaging design, section 2): it uploads nothing. */

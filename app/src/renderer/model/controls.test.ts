@@ -4,7 +4,7 @@ import {BLOCKERS} from "../copy";
 import {addEntry, FIX_ACTIONS, fixAction, removeEntry, statusSignature} from "./controls";
 
 const status = (patch: Partial<EngineStatus> = {}): EngineStatus =>
-  ({capture: "off", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, checkingPermission: false, ...patch});
+  ({capture: "off", resumeAt: null, blockers: [], extractionPaused: null, pending: 0, waitingUpload: 0, nothingRead: null, checkingPermission: false, account: null, ...patch});
 
 describe("the one fix button", () => {
   it("gives every blocker exactly one action, and no blocker two", () => {

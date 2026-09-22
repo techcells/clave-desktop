@@ -3,6 +3,7 @@ import {SESSION_REFRESH_BEFORE_MS} from "../constants";
 import {ApiError, type Session} from "../ports/claveApi";
 import {createFakeApi} from "../testing/fakeApi";
 import {createFakeCipher, createMemFs} from "../testing/memFs";
+import {createJsonFile} from "../storage/jsonFile";
 import {createSessionStore} from "./session";
 
 const PATH = "/d/session.bin";
@@ -43,6 +44,58 @@ describe("session", () => {
     expect(await store.signInWith(() => api.exchangeOAuthAttempt("attempt-bad", "verifier"))).toEqual({ok: false, code: "UNAUTHORISED"});
     expect(store.current()).toBeNull();
     expect(store.names()).toEqual([]);
+  });
+
+  it("keeps who is signed in, across a refresh and a restart, and forgets it on sign-out", async () => {
+    const {api, make, advance} = setup();
+    const store = make();
+    expect(store.account()).toBeNull();
+    await store.signIn("sardor", "correct");
+    const sardor = {fullName: "Sardor Astanov", handle: "sardor", email: "sardor@example.com"};
+    expect(store.account()).toEqual(sardor);
+    advance(6 * 24 * 60 * 60_000 + 1);
+    await store.refreshIfDue();
+    expect(api.calls.filter((c) => c === "refresh")).toEqual(["refresh"]);
+    expect(store.account()).toEqual(sardor);
+    const again = make();
+    await again.restore();
+    expect(again.account()).toEqual(sardor);
+    await again.signOut();
+    expect(again.account()).toBeNull();
+  });
+
+  it("answers an older server's profile, which says nothing about the account, with an account of nulls", async () => {
+    const {api, make} = setup();
+    api.account = null;
+    const store = make();
+    await store.signIn("sardor", "correct");
+    expect(store.account()).toEqual({fullName: null, handle: null, email: null});
+  });
+
+  it("asks once, after restoring, for the account a session stored by an older build does not have", async () => {
+    const {api, fs, make, now} = setup();
+    const legacy = createJsonFile<unknown>({fs, path: PATH, parse: (v) => v, cipher: createFakeCipher()});
+    await legacy.save({session: {token: "token-old", expiresAt: now() + 7 * 24 * 60 * 60_000, userId: "user:sardor"}, names: ["Sardor Astanov"]});
+    api.failWith = "OFFLINE";
+    const offline = make();
+    await offline.restore();
+    await tick();
+    expect(offline.current()?.token).toBe("token-old");      // still signed in, only the details are unknown
+    expect(offline.account()).toBeNull();
+    api.failWith = null;
+    const store = make();
+    const seen = vi.fn();
+    store.onChange(seen);
+    await store.restore();
+    await tick();
+    expect(store.account()).toEqual({fullName: "Sardor Astanov", handle: "sardor", email: "sardor@example.com"});
+    expect(seen).toHaveBeenLastCalledWith(true);
+    const calls = api.calls.length;
+    const next = make();
+    await next.restore();
+    await tick();
+    expect(next.account()?.email).toBe("sardor@example.com");
+    expect(api.calls.length).toBe(calls);                     // stored now, so never asked again
   });
 
   it("renews a running session before its token runs out: a day early for a long token, halfway for a short one, once", async () => {
@@ -167,7 +220,7 @@ describe("session", () => {
 
     api.failQueue = ["UNAUTHORISED"];
     const names = await store.withSession((s) => api.profile(s));
-    expect(names).toEqual({names: ["Sardor Astanov"]});
+    expect(names).toMatchObject({names: ["Sardor Astanov"]});
     expect(store.current()?.token).toBe("token-2");
 
     const seen = vi.fn();
@@ -285,8 +338,8 @@ describe("session", () => {
     resolveRefresh({token: "token-fresh", expiresAt: 9_999_999_999, userId: "user:sardor"});
 
     const [a, b] = await Promise.all([callA, callB]);
-    expect(a).toEqual({names: ["Sardor Astanov"]});
-    expect(b).toEqual({names: ["Sardor Astanov"]});
+    expect(a).toMatchObject({names: ["Sardor Astanov"]});
+    expect(b).toMatchObject({names: ["Sardor Astanov"]});
     expect(refreshCalls).toBe(1);
     expect(store.current()?.token).toBe("token-fresh");
   });

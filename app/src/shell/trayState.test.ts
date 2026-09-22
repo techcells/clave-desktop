@@ -8,7 +8,7 @@ const ALL_BLOCKERS: Blocker[] = [
 ];
 
 const status = (capture: EngineStatus["capture"], blockers: Blocker[], pending = 0): EngineStatus =>
-  ({capture, resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false});
+  ({capture, resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false, account: null});
 
 describe("tray state", () => {
   it("has an explicit answer for every blocker the engine can report", () => {
