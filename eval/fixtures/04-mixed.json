@@ -1,0 +1,19 @@
+{
+  "name": "Work interrupted by a banking tab and a private window",
+  "category": "mixed",
+  "userNames": ["Sardor Astanov"],
+  "skills": [{"id": "docker", "displayName": "Docker", "canonicalName": "docker", "aliases": []}],
+  "competencies": [{"id": "cp-problem", "name": "Problem Solving", "description": "Breaks a problem down and resolves it"}],
+  "reads": [
+    {"app": "Code", "title": "docker-compose.yml — platform", "text": "services:\n  api:\n    build: ./api\n    depends_on: [db]\n    healthcheck:\n      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8080/health\"]\n      interval: 10s\n  db:\n    image: postgres:16\n# Docker: the api container started before the database accepted connections, so added a healthcheck and a depends_on condition\n# verified with docker compose up --wait and a cold start"},
+    {"app": "Google Chrome", "title": "Accounts", "text": "Checking account ending 4410  Available balance $3,210.55  Recent transactions  Transfer money  Pay bills  Statements and documents  Card controls  Alerts  Profile and settings  Sign out", "toolbarText": "https://secure.chase.com/web/auth/dashboard"},
+    {"app": "Google Chrome", "title": "Example Domain", "text": "Some page the user chose to open privately, with enough words on it to be kept if it were not private at all.", "toolbarText": "example.com   Incognito"},
+    {"app": "Terminal", "title": "zsh — platform", "text": "$ docker compose up --wait\n[+] Running 2/2\n Container platform-db-1   Healthy\n Container platform-api-1  Healthy\n$ docker compose logs api | tail -3\napi listening on 8080\nconnected to database\nready", "gapSeconds": 60}
+  ],
+  "model": {
+    "gate": {"activity_summary": "Fixed a container start-order problem.", "is_professional": true, "user_demonstrated_something": true},
+    "statements": {"evidence": [{"target_id": "docker", "statement": "Resolved a container start-order failure by adding a health check and a readiness condition, then verified a cold start."}]}
+  },
+  "expect": {"outcomes": ["kept", "excludedSite", "privateWindow", "kept"], "modelCalls": 2, "modelMustNotSee": ["balance", "4410", "3,210", "chose to open privately"], "digestTargets": ["docker"], "mustNotAppear": ["chase", "4410"]},
+  "expectReal": {"digestMin": 0, "digestMax": 3, "allowedTargets": ["docker", "cp-problem"]}
+}

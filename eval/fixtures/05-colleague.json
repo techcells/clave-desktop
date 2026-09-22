@@ -1,0 +1,13 @@
+{
+  "name": "A colleague describes their own achievement; the user only reacts",
+  "category": "colleague",
+  "userNames": ["Sardor Astanov"],
+  "skills": [{"id": "k8s", "displayName": "Kubernetes", "canonicalName": "kubernetes", "aliases": ["k8s"]}],
+  "competencies": [{"id": "cp-problem", "name": "Problem Solving", "description": "Breaks a problem down and resolves it"}],
+  "reads": [
+    {"app": "Slack", "title": "#platform — Acme Workspace", "text": "Tomas Lindqvist 16:20 Finished the Kubernetes migration. I moved every service to the new cluster, wrote the autoscaling policies, and cut node costs by a third by right-sizing the pools. The tricky part was draining stateful workloads without downtime, which I solved with a staged rollout and pod disruption budgets.\nSardor 16:24 nice work, congrats\nTomas Lindqvist 16:25 thanks! writeup is in the wiki if anyone wants the details\nSardor 16:26 will read it tomorrow"}
+  ],
+  "model": {"gate": {"activity_summary": "Read a colleague's update about a migration and congratulated them.", "is_professional": true, "user_demonstrated_something": false}, "statements": null},
+  "expect": {"outcomes": ["kept"], "modelCalls": 1, "modelMustNotSee": [], "digestTargets": [], "mustNotAppear": ["Tomas", "Lindqvist"]},
+  "expectReal": {"digestMin": 0, "digestMax": 0, "allowedTargets": []}
+}

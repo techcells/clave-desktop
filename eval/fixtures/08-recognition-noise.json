@@ -1,0 +1,20 @@
+{
+  "name": "Text recognition errors and a line-number gutter",
+  "category": "recognition-noise",
+  "userNames": ["Sardor Astanov"],
+  "skills": [
+    {"id": "py", "displayName": "Python", "canonicalName": "python", "aliases": []},
+    {"id": "pandas", "displayName": "pandas", "canonicalName": "pandas", "aliases": []}
+  ],
+  "competencies": [{"id": "cp-problem", "name": "Problem Solving", "description": "Breaks a problem down and resolves it"}],
+  "reads": [
+    {"app": "Code", "title": "clean_orders.py — analytics", "text": "1 2 3 4 5 6 7 8 9\nimp0rt pandas as pd\ndf = pd.read_csv('orders.csv', parse_dates=['created_at'])\n# Python: duplicated rows came from a retry in the exporter, so drop on the natural key instead of the full row\ndf = df.drop_duplicates(subset=['order_id', 'line_no'], keep='last')\ndf['total'] = df['qty'] * df['unit_price']\nassert df['total'].ge(0).all(), 'negative totals mean refunds leaked into sales'\nprint(df.groupby('region')['total'].sum().sort_values(ascending=False).head())"},
+    {"app": "Terminal", "title": "zsh — analytics", "text": "$ python clean_orders.py\nregion\nnorth    l8420.50\nsouth    17210.00\nwest      9l05.25\n$ pytest tests/test_clean_orders.py -q\n....                                                                  [100%]\n4 passed in 0.62s", "gapSeconds": 60}
+  ],
+  "model": {
+    "gate": {"activity_summary": "Cleaned an orders dataset and verified it with tests.", "is_professional": true, "user_demonstrated_something": true},
+    "statements": {"evidence": [{"target_id": "pandas", "statement": "Traced duplicated rows to a retrying exporter and removed them on the natural key, then verified totals with tests."}]}
+  },
+  "expect": {"outcomes": ["kept", "kept"], "modelCalls": 2, "modelMustNotSee": [], "digestTargets": ["pandas"], "mustNotAppear": ["clean_orders", "17210", "l8420.50", "8420.50", "9l05.25"]},
+  "expectReal": {"digestMin": 0, "digestMax": 3, "allowedTargets": ["py", "pandas", "cp-problem"]}
+}

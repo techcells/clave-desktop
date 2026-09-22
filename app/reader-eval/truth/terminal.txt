@@ -1,0 +1,12 @@
+$ pnpm --dir app test
+ RUN  v5.0.1 /Users/dev/clave-agent/app
+ ✓ src/core/scrub.test.ts (41 tests) 38ms
+ ✓ src/main/capture/loop.test.ts (57 tests) 212ms
+ ❯ src/main/reader/supervisor.test.ts (12 tests | 1 failed) 96ms
+   × restarts with backoff after an unplanned exit
+     AssertionError: expected 500 to be 1000
+ Test Files  1 failed | 63 passed (64)
+      Tests  1 failed | 767 passed (768)
+$ git log --oneline -3
+a41f9c2 fix(loop): abandon reader calls on stop
+77be013 feat(shell): refuse to start a packaged build on stand-ins

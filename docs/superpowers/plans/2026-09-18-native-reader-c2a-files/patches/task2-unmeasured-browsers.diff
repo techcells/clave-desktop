@@ -1,0 +1,164 @@
+--- app/src/core/exclusions/defaults.ts
++++ app/src/core/exclusions/defaults.ts
+@@ -17,7 +17,25 @@
+   "nubank.com.br", "itau.com.br", "bradesco", "santander", "accounts.google.com", "appleid.apple.com"
+ ];
+ 
++/**
++ * Every browser we know of, matched as a NAME PREFIX on a word boundary (see `isBrowser`): an entry
++ * matches the app name itself and any name that continues with a space, so one entry covers the
++ * whole family — "Google Chrome Canary", "Brave Browser Beta", "Microsoft Edge Dev", "Firefox
++ * Developer Edition", "Opera GX". The boundary is what keeps "Archive Utility" out of "arc",
++ * "Operator" out of "opera" and "Minecraft" out of "min".
++ */
+ export const BROWSERS = [
+   "google chrome", "chrome", "chromium", "safari", "firefox", "microsoft edge", "brave browser",
+-  "arc", "opera", "vivaldi", "zen"
++  "arc", "opera", "vivaldi", "zen",
++  "orion", "duckduckgo", "tor browser", "helium", "sigmaos", "librewolf", "waterfox", "floorp",
++  "thorium", "yandex", "whale", "min"
+ ];
++
++/**
++ * The browsers whose toolbar strip the reader can find: the height of the strip was measured for
++ * these two and for no others (phase 0, P5), and it cannot be derived from the window. Private
++ * windows and excluded sites are recognised from that strip, so a browser without one is not read at
++ * all — unknown means no. A browser joins this list only together with a measured band in the
++ * reader (`app/native/reader/src/toolbar.rs`), never on its own.
++ */
++export const MEASURED_BROWSERS = ["google chrome", "safari"];
+--- app/src/core/exclusions/index.ts
++++ app/src/core/exclusions/index.ts
+@@ -1,5 +1,5 @@
+ import type {FrontWindow, SkipReason} from "../types";
+-import {BROWSERS, BUILT_IN_EXCLUSIONS} from "./defaults";
++import {BROWSERS, BUILT_IN_EXCLUSIONS, MEASURED_BROWSERS} from "./defaults";
+ import {hasPrivateToolbarMarker, isPrivateTitle} from "./privateWindows";
+ import {matchRule, parseRules} from "./rules";
+ import {parseSites, siteExcluded} from "./sites";
+@@ -11,7 +11,19 @@
+   after(front: FrontWindow, toolbarText: string | undefined): SkipReason | null;
+ }
+ 
+-const isBrowser = (app: string) => BROWSERS.includes(app.trim().toLowerCase());
++/**
++ * A browser is a name that IS a known browser or that begins with one followed by a space.
++ * Exact equality used to be enough, and it let every channel variant through unchecked: "Google
++ * Chrome Canary", "Brave Browser Beta" and "Firefox Developer Edition" were not browsers, so their
++ * private windows were read in full with no strip and no private-window check. The space is a word
++ * boundary, so "Archive Utility" is not "arc", "Operator" is not "opera" and "Minecraft" is not "min".
++ */
++const isBrowser = (app: string) => {
++  const name = app.trim().toLowerCase();
++  return BROWSERS.some((browser) => name === browser || name.startsWith(`${browser} `));
++};
++/** Exact, and deliberately not a prefix: a variant is a browser, but its strip height is not measured. */
++const isMeasuredBrowser = (app: string) => MEASURED_BROWSERS.includes(app.trim().toLowerCase());
+ /** The reader is another process, so a front window is checked like any other outside input. */
+ const wellFormed = (front: unknown): front is FrontWindow =>
+   typeof front === "object" && front !== null
+@@ -32,6 +44,8 @@
+       if (!valid) return "rulesInvalid";
+       if (!wellFormed(front) || !front.app.trim() || !front.title.trim()) return "unknownWindow";
+       if (builtIn.has(front.app.trim().toLowerCase())) return "excludedApp";
++      // Decided before anything is captured: a browser whose toolbar strip the reader cannot find is not read.
++      if (isBrowser(front.app) && !isMeasuredBrowser(front.app)) return "excludedApp";
+       const hit = matchRule(user.rules, front);
+       if (hit === "app") return "excludedApp";
+       if (hit === "title") return "excludedTitle";
+@@ -42,7 +56,10 @@
+       if (!valid) return "rulesInvalid";
+       if (!wellFormed(front)) return "unknownWindow";
+       if (!isBrowser(front.app)) return null;
+-      if (toolbarText && hasPrivateToolbarMarker(toolbarText)) return "privateWindow";
++      // The safety net behind `before`: a browser read that arrives without its strip cannot be checked
++      // for a private window or an excluded site, so it is never kept.
++      if (toolbarText === undefined) return "unknownWindow";
++      if (toolbarText && hasPrivateToolbarMarker(toolbarText, front.app)) return "privateWindow";
+       if (siteExcluded(sites.sites, front.title, toolbarText)) return "excludedSite";
+       return null;
+     }
+--- app/src/core/exclusions/index.test.ts
++++ app/src/core/exclusions/index.test.ts
+@@ -40,11 +40,58 @@
+   it("reports title matches and private windows separately", () => {
+     const x = defaults();
+     expect(x.before({app: "Safari", title: "Online Banking - Accounts"})).toBe("excludedTitle");
+-    expect(x.before({app: "Firefox", title: "Example — Private Browsing"})).toBe("privateWindow");
++    expect(x.before({app: "Google Chrome", title: "New Tab - Google Chrome (Incognito)"})).toBe("privateWindow");
+   });
++
++  // Private windows and excluded sites are recognised from the toolbar strip, and the reader can only
++  // find the strip of a browser whose strip height was measured. Unknown means no.
++  it.each(["Firefox", "Microsoft Edge", "Brave Browser", "Arc", "Opera", "Vivaldi", "Zen", "Chromium", "chrome"])(
++    "does not read %s: no measured toolbar strip", (app) => {
++      expect(defaults().before({app, title: "Pull requests · acme/api"})).toBe("excludedApp");
++    });
++
++  it.each(["Google Chrome", "Safari", " safari "])("reads %s, whose strip is measured", (app) => {
++    expect(defaults().before({app, title: "Pull requests · acme/api"})).toBeNull();
++  });
++
++  // A channel variant is a browser. Its strip height was never measured, so it is not read — the
++  // same answer the unmeasured browsers above get, reached through the name prefix.
++  it.each([
++    "Google Chrome Canary", "Safari Technology Preview", "Brave Browser Beta", "Microsoft Edge Dev",
++    "Opera GX", "Firefox Developer Edition", "Orion", "Tor Browser", "LibreWolf", "Min"
++  ])("does not read %s: a browser variant with no measured strip", (app) => {
++    expect(defaults().before({app, title: "Pull requests · acme/api"})).toBe("excludedApp");
++  });
++
++  // The prefix match stops at a word boundary, so a name that merely starts with a browser's
++  // letters is not a browser.
++  it.each(["Archive Utility", "Operator", "Zenith", "Code", "Minecraft"])(
++    "%s is not a browser and is read like any other app", (app) => {
++      expect(defaults().before({app, title: "Pull requests · acme/api"})).toBeNull();
++    });
+ });
+ 
+ describe("after recognition", () => {
++  it("never keeps a browser read that arrives without its toolbar strip", () => {
++    const x = defaults();
++    expect(x.after({app: "Google Chrome", title: "Pull requests"}, undefined)).toBe("unknownWindow");
++    expect(x.after({app: "Safari", title: "Pull requests"}, undefined)).toBe("unknownWindow");
++    expect(x.after({app: "Safari", title: "Pull requests"}, "")).toBeNull();          // an empty strip is still a strip
++    expect(x.after({app: "Code", title: "query.sql"}, undefined)).toBeNull();          // not a browser: nothing to check
++  });
++
++  // The safety net has to reach the variants too, or a read that slipped past `before` would be kept.
++  it.each(["Google Chrome Canary", "Safari Technology Preview", "Brave Browser Beta", "Opera GX", "Orion"])(
++    "never keeps a read from %s that arrives without its toolbar strip", (app) => {
++      expect(defaults().after({app, title: "Pull requests"}, undefined)).toBe("unknownWindow");
++    });
++
++  it("recognises Safari's private badge, which is the bare word, in Safari only", () => {
++    const x = defaults();
++    expect(x.after({app: "Safari", title: "Example Domain"}, "• Private\n@ example.com")).toBe("privateWindow");
++    expect(x.after({app: "Google Chrome", title: "acme/private-api"}, "github.com/acme/private-api")).toBeNull();
++  });
++
+   it("only inspects browsers", () => {
+     const x = defaults();
+     expect(x.after({app: "Code", title: "paypal.com notes.md"}, "paypal.com")).toBeNull();
+--- app/src/renderer/copy.ts
++++ app/src/renderer/copy.ts
+@@ -113,7 +113,7 @@
+     download: (gigabytes: string) => `Download the model (${gigabytes} GB)`,
+     checking: "Checking it works on your machine",
+     permission: "macOS will ask you to allow Screen Recording. After you allow it, the app has to restart once.",
+-    neverRead: "What is never read", privateWindows: "Private browser windows are always skipped.",
++    neverRead: "What is never read", privateWindows: "Chrome and Safari are read, except their private windows. Other browsers are not read yet.",
+     reviewTime: "When should I show you today's evidence?", done: "All set. Reading stays off until you switch it on.",
+     step: (n: number, of: number) => `Step ${n} of ${of}`,
+     pitch: "How this works",
+--- app/src/renderer/screens/Settings.tsx
++++ app/src/renderer/screens/Settings.tsx
+@@ -61,6 +61,8 @@
+             />
+           </p>
+         )}
++        {/* Not an entry the user can remove: which browsers are read is decided by what the reader can measure. */}
++        <p className="note">{COPY.onboarding.privateWindows}</p>
+       </EntryList>
+ 
+       <EntryList

@@ -1,0 +1,3 @@
+# Wide enough that a line of objc2 calls or a SAFETY comment does not wrap into noise.
+max_width = 120
+use_small_heuristics = "Max"

@@ -1,0 +1,7 @@
+Reunião de revisão do sprint, terça-feira às 14h30
+A migração do serviço de autenticação não está concluída.
+João: já corrigi a validação do endereço e a paginação.
+Conceição: faltam três testes de integração e a documentação.
+Decisão: adiamos a publicação para a próxima semana.
+Ações: atualizar o calendário, avisar o cliente e rever o orçamento.
+Observação: a versão de produção também precisa de atenção.

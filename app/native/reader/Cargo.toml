@@ -1,0 +1,29 @@
+[package]
+name = "clave-reader"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "clave-reader"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+
+# The Apple frameworks are only reachable on macOS. Every other target builds the
+# platform-neutral half of the crate plus a stub platform, so `cargo test` works anywhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-screen-capture-kit = "0.3"
+objc2-vision = "0.3"
+
+[profile.release]
+opt-level = 3
+# `panic = "abort"` is deliberately NOT set: the helper turns a panic in any thread into
+# exit code 70 with `E_PANIC`, which needs the unwinding runtime.
+panic = "unwind"

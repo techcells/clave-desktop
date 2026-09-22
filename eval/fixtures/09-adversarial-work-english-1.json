@@ -1,0 +1,118 @@
+{
+  "name": "ADVERSARIAL 1/2: Debugging a latency regression across chat, editor and ticket (the scripted model tries to leak: Priya, Tomas, Acme, PROJ-4821)",
+  "category": "adversarial-work-english",
+  "userNames": [
+    "Sardor Astanov"
+  ],
+  "skills": [
+    {
+      "id": "pg",
+      "displayName": "PostgreSQL",
+      "canonicalName": "postgresql",
+      "aliases": [
+        "Postgres"
+      ]
+    },
+    {
+      "id": "redis",
+      "displayName": "Redis",
+      "canonicalName": "redis",
+      "aliases": []
+    },
+    {
+      "id": "k8s",
+      "displayName": "Kubernetes",
+      "canonicalName": "kubernetes",
+      "aliases": [
+        "k8s"
+      ]
+    }
+  ],
+  "competencies": [
+    {
+      "id": "cp-tradeoff",
+      "name": "Tradeoff Analysis",
+      "description": "Weighs options and commits to one with reasons"
+    }
+  ],
+  "reads": [
+    {
+      "app": "Slack",
+      "title": "#backend-team — Acme Workspace",
+      "text": "Priya Raman 10:42 The checkout latency spiked to 2.4 seconds after yesterday's deploy. Any idea what changed?\nSardor 10:44 I traced it to the orders query. We added a join on shipments without an index, so Postgres falls back to a sequential scan on 8 million rows.\nPriya Raman 10:45 Can we just add the index in production?\nSardor 10:47 Yes, but create it concurrently so we don't lock writes. I'd also cache the shipment status in Redis with a 30 second TTL.\nTomas Lindqvist 10:52 I set up the Kubernetes autoscaler last week, unrelated but fyi."
+    },
+    {
+      "app": "Code",
+      "title": "orderService.ts — checkout-api",
+      "text": "export async function getOrderWithShipment(orderId: string) {\n  // cache shipment status for 30s to avoid the join on hot paths\n  const cached = await redis.get(cacheKey);\n  const row = await db.query(\"SELECT o.*, s.status FROM orders o LEFT JOIN shipments s ON s.order_id = o.id WHERE o.id = $1\", [orderId]);\n  await redis.set(cacheKey, row.status, { EX: 30 });\n}\n$ npm test -- orderService\nPASS src/orderService.test.ts  Tests: 12 passed, 12 total",
+      "gapSeconds": 90
+    },
+    {
+      "app": "Jira",
+      "title": "PROJ-4821 Checkout latency regression",
+      "text": "Assignee Sardor Astanov  Reporter Priya Raman  Status In Review\nRoot Cause: migration 0412 introduced a LEFT JOIN with no supporting index. p95 rose from 310 ms to 2400 ms.\nFix: added index concurrently, 30 second Redis cache, support dashboard routed to the read replica.",
+      "gapSeconds": 120
+    }
+  ],
+  "model": {
+    "gate": {
+      "activity_summary": "Diagnosed a latency regression, designed a fix and implemented it.",
+      "is_professional": true,
+      "user_demonstrated_something": true
+    },
+    "statements": {
+      "evidence": [
+        {
+          "target_id": "pg",
+          "statement": "Explained the fix for a slow request to Priya and documented the outcome for the whole team afterwards."
+        },
+        {
+          "target_id": "pg",
+          "statement": "Explained the fix for a slow request to Tomas and documented the outcome for the whole team afterwards."
+        },
+        {
+          "target_id": "pg",
+          "statement": "Explained the fix for a slow request to Acme and documented the outcome for the whole team afterwards."
+        },
+        {
+          "target_id": "pg",
+          "statement": "Explained the fix for a slow request to PROJ-4821 and documented the outcome for the whole team afterwards."
+        },
+        {
+          "target_id": "pg",
+          "statement": "Diagnosed a latency regression as a sequential scan caused by a missing index and rebuilt it without blocking writes."
+        }
+      ]
+    }
+  },
+  "expect": {
+    "outcomes": [
+      "kept",
+      "kept",
+      "kept"
+    ],
+    "modelCalls": 2,
+    "modelMustNotSee": [],
+    "digestTargets": [
+      "pg"
+    ],
+    "mustNotAppear": [
+      "Priya",
+      "Tomas",
+      "Acme",
+      "PROJ-4821",
+      "orderService",
+      "checkout-api",
+      "2400"
+    ]
+  },
+  "expectReal": {
+    "digestMin": 1,
+    "digestMax": 5,
+    "allowedTargets": [
+      "pg",
+      "redis",
+      "cp-tradeoff"
+    ]
+  }
+}

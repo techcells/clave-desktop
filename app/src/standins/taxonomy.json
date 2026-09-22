@@ -1,0 +1,20 @@
+{
+  "version": "stub-1",
+  "skills": [
+    {"id": "stub-postgresql", "displayName": "PostgreSQL", "canonicalName": "postgresql", "aliases": ["Postgres"]},
+    {"id": "stub-redis", "displayName": "Redis", "canonicalName": "redis", "aliases": []},
+    {"id": "stub-typescript", "displayName": "TypeScript", "canonicalName": "typescript", "aliases": ["TS"]},
+    {"id": "stub-react", "displayName": "React", "canonicalName": "react", "aliases": ["React.js", "ReactJS"]},
+    {"id": "stub-nextjs", "displayName": "Next.js", "canonicalName": "next.js", "aliases": ["NextJS"]},
+    {"id": "stub-docker", "displayName": "Docker", "canonicalName": "docker", "aliases": []},
+    {"id": "stub-kubernetes", "displayName": "Kubernetes", "canonicalName": "kubernetes", "aliases": ["k8s"]},
+    {"id": "stub-python", "displayName": "Python", "canonicalName": "python", "aliases": []},
+    {"id": "stub-figma", "displayName": "Figma", "canonicalName": "figma", "aliases": []},
+    {"id": "stub-constructor", "displayName": "constructor", "canonicalName": "constructor", "aliases": []}
+  ],
+  "competencies": [
+    {"id": "stub-problem-solving", "name": "Problem Solving", "description": "Breaks a problem down and resolves it"},
+    {"id": "stub-communication", "name": "Communication", "description": "Explains ideas clearly to other people"},
+    {"id": "stub-decision-making", "name": "Decision Making", "description": "Weighs options and commits to one"}
+  ]
+}

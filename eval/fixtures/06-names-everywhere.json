@@ -1,0 +1,23 @@
+{
+  "name": "The model leaks a name, the client, a ticket and a figure; only the clean statement survives",
+  "category": "names-everywhere",
+  "userNames": ["Sardor Astanov"],
+  "skills": [{"id": "figma", "displayName": "Figma", "canonicalName": "figma", "aliases": []}],
+  "competencies": [{"id": "cp-comm", "name": "Clear Communication", "description": "Explains a hard idea plainly"}],
+  "reads": [
+    {"app": "Microsoft Teams", "title": "Design review | Northwind Traders", "text": "Helena Brandt 11:02 Can you walk us through why the onboarding has 7 screens? Marketing at Northwind wants it down to 3.\nSardor 11:05 Sure. In Figma I mapped every field to the step where we first need it. 4 of the 7 screens only exist because billing details are asked up front. If we defer billing until the first invoice, the flow drops to 3 screens and nothing is lost.\nHelena Brandt 11:07 That is much clearer than the deck. Oskar, can you check with finance?\nOskar Lind 11:08 Will do, ticket DSN-208 is tracking it.\nSardor 11:10 I will post the revised prototype with 3 variants and the drop-off numbers, 41 percent on screen 5."}
+  ],
+  "model": {
+    "gate": {"activity_summary": "Explained a design decision and proposed a shorter flow.", "is_professional": true, "user_demonstrated_something": true},
+    "statements": {"evidence": [
+      {"target_id": "cp-comm", "statement": "Explained to Helena why the onboarding flow was long and how deferring billing would shorten it."},
+      {"target_id": "figma", "statement": "Mapped every onboarding field for Northwind to the step that first needs it and proposed a shorter flow."},
+      {"target_id": "figma", "statement": "Tracked the redesign under DSN-208 and prepared revised prototype variants for a follow-up design review."},
+      {"target_id": "cp-comm", "statement": "Presented drop-off of forty one percent on one screen to justify deferring billing details in the flow."},
+      {"target_id": "cp-comm", "statement": "Explained a long onboarding flow by mapping each field to where it was first needed and proposed a shorter one."}
+    ]}
+  },
+  "expect": {"outcomes": ["kept"], "modelCalls": 2, "modelMustNotSee": [], "digestTargets": ["cp-comm"],
+    "mustNotAppear": ["Helena", "Brandt", "Oskar", "Northwind", "DSN-208", "forty one"]},
+  "expectReal": {"digestMin": 0, "digestMax": 4, "allowedTargets": ["figma", "cp-comm"]}
+}

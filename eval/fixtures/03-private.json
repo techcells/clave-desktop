@@ -1,0 +1,15 @@
+{
+  "name": "Personal chat, a video and shopping",
+  "category": "private",
+  "userNames": ["Sardor Astanov"],
+  "skills": [{"id": "pg", "displayName": "PostgreSQL", "canonicalName": "postgresql", "aliases": ["Postgres"]}],
+  "competencies": [{"id": "cp-problem", "name": "Problem Solving", "description": "Breaks a problem down and resolves it"}],
+  "reads": [
+    {"app": "Telegram", "title": "Madina", "text": "Madina 19:02 did you pick up the cake for mom's birthday?\nSardor 19:03 yes, chocolate one. also booked the restaurant for 8\nMadina 19:03 love you\nSardor 19:04 love you too, home in 30"},
+    {"app": "Google Chrome", "title": "Top 10 Goals of the Week - YouTube", "text": "Top 10 Goals of the Week\n1.2M views  Subscribe  Comments 4,312\nUp next: Best saves of the season, Funniest moments, Full match highlights, Press conference reactions\nShow more  Sort by  Top comments  Newest first  Add a comment  Like  Dislike  Share  Download  Clip  Save\nAutoplay is on  Live chat replay is off  Transcript  Report", "toolbarText": "youtube.com/watch?v=abc123"},
+    {"app": "Google Chrome", "title": "Shopping Cart", "text": "Shopping Cart\nWireless earbuds  $49.99  Qty 1  Delete  Save for later  Compare with similar items\nSubtotal (1 item): $49.99  Proceed to checkout  This order contains a gift\nCustomers who bought this item also bought  Frequently bought together  Recently viewed items\nYour items  Buy it again  Sponsored products related to this item", "toolbarText": "shop.example.com/cart"}
+  ],
+  "model": {"gate": {"activity_summary": "Watching a video and shopping online.", "is_professional": false, "user_demonstrated_something": false}, "statements": null},
+  "expect": {"outcomes": ["excludedApp", "kept", "kept"], "modelCalls": 1, "modelMustNotSee": ["Madina", "birthday", "love you"], "digestTargets": [], "mustNotAppear": ["Madina", "earbuds"]},
+  "expectReal": {"digestMin": 0, "digestMax": 0, "allowedTargets": []}
+}

@@ -1,0 +1,102 @@
+{
+  "name": "ADVERSARIAL 1/2: Fixing a form bug, discussed in Portuguese (the scripted model tries to leak: Camila, Nunes, Rafael, Loja Verde)",
+  "category": "adversarial-work-portuguese",
+  "userNames": [
+    "Rafael Souza"
+  ],
+  "skills": [
+    {
+      "id": "react",
+      "displayName": "React",
+      "canonicalName": "react",
+      "aliases": [
+        "React.js"
+      ]
+    },
+    {
+      "id": "ts",
+      "displayName": "TypeScript",
+      "canonicalName": "typescript",
+      "aliases": []
+    }
+  ],
+  "competencies": [
+    {
+      "id": "cp-problem",
+      "name": "Problem Solving",
+      "description": "Breaks a problem down and resolves it"
+    }
+  ],
+  "reads": [
+    {
+      "app": "Slack",
+      "title": "#frontend — Loja Verde",
+      "text": "Camila Nunes 14:02 O formulário de cadastro está perdendo os dados quando o usuário volta uma etapa. Alguém sabe o motivo?\nRafael Souza 14:05 Achei, é um problema clássico de React. O estado de cada etapa fica em um useState local, então ao desmontar o componente os valores somem. Vou mover para um reducer no componente pai e manter os campos controlados.\nCamila Nunes 14:06 Boa. Isso resolve também o problema da validação?\nRafael Souza 14:09 Resolve. A validação roda no reducer, então o erro aparece antes de avançar. Vou escrever testes para entrada vazia e e-mail inválido."
+    },
+    {
+      "app": "Code",
+      "title": "CadastroForm.tsx — loja-web",
+      "text": "const [state, dispatch] = useReducer(formReducer, initialState);\nuseEffect(() => { if (state.step === 2) validate(state.fields); }, [state.step]);\nfunction formReducer(state: FormState, action: FormAction): FormState {\n  switch (action.type) { case 'field': return { ...state, fields: { ...state.fields, [action.name]: action.value } }; }\n}\n// TypeScript: FormAction is a discriminated union so every case is checked",
+      "gapSeconds": 120
+    }
+  ],
+  "model": {
+    "gate": {
+      "activity_summary": "Diagnosed lost form state and moved it into a reducer with validation and tests.",
+      "is_professional": true,
+      "user_demonstrated_something": true
+    },
+    "statements": {
+      "evidence": [
+        {
+          "target_id": "react",
+          "statement": "Explained the fix for a slow request to Camila and documented the outcome for the whole team afterwards."
+        },
+        {
+          "target_id": "react",
+          "statement": "Explained the fix for a slow request to Nunes and documented the outcome for the whole team afterwards."
+        },
+        {
+          "target_id": "react",
+          "statement": "Explained the fix for a slow request to Rafael and documented the outcome for the whole team afterwards."
+        },
+        {
+          "target_id": "react",
+          "statement": "Explained the fix for a slow request to Loja Verde and documented the outcome for the whole team afterwards."
+        },
+        {
+          "target_id": "react",
+          "statement": "Diagnosed lost form state as component-local storage and moved it into a parent reducer with controlled fields."
+        }
+      ]
+    }
+  },
+  "expect": {
+    "outcomes": [
+      "kept",
+      "kept"
+    ],
+    "modelCalls": 2,
+    "modelMustNotSee": [],
+    "digestTargets": [
+      "react"
+    ],
+    "mustNotAppear": [
+      "Camila",
+      "Nunes",
+      "Rafael",
+      "Loja Verde",
+      "CadastroForm",
+      "loja-web"
+    ]
+  },
+  "expectReal": {
+    "digestMin": 1,
+    "digestMax": 4,
+    "allowedTargets": [
+      "react",
+      "ts",
+      "cp-problem"
+    ]
+  }
+}

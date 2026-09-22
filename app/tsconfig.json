@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"],
+  // The renderer is a browser program: it belongs to tsconfig.renderer.json, which gives it the DOM
+  // types. Checking it here, with node types and no DOM, would either need DOM types in the main
+  // process (where `document` does not exist) or pass renderer code that cannot compile.
+  "exclude": ["src/renderer/**"]
+}

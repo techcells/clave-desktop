@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output (app/scripts/build.mjs, build:preview, build:native)
+app/dist/
+app/dist-preview/
+app/native/reader/target/
+
+# Generated at run time
+app/reader-eval/out/
+app/.dev-launch.json
+
+# Local model and user data never live in the repo, but guard against copies
+*.gguf
+*.node
+
+# Agent and tool scratch
+.superpowers/
+.mypy_cache/
+.claude/
+
+# Logs and test output
+*.log
+coverage/
+.vitest/
+
+# Editors and OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Secrets and signing material
+.env
+.env.*
+*.pem
+*.p12
+*.provisionprofile
