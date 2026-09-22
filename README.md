@@ -26,10 +26,16 @@ The app works with Wi-Fi off; only the statements you approve ever leave.
 
 ## Requirements
 
-- macOS 14 or later (Windows and Linux are planned; the reader is macOS-only today)
-- Screen Recording permission, asked for on first run
+- macOS 14 or later, with Screen Recording permission, asked for on first run
+- Or Windows 10 version 1903 or later (Windows 11 recommended), which needs no permission. Windows
+  runs from a checkout for now; there is no Windows installer yet. Linux is planned.
 - About 3 GB of disk for the model, downloaded once during set-up
-- For development: Node.js, pnpm, and a Rust toolchain for the native reader
+- For development: Node.js, pnpm, and a Rust toolchain for the native reader; on Windows, also the
+  Visual Studio Build Tools with the C++ workload and a Windows SDK
+
+The reader uses each system's own parts: ScreenCaptureKit and Vision on macOS, Windows.Graphics.Capture
+and Windows.Media.Ocr on Windows. On Windows the recogniser reads the languages whose Windows language
+pack is installed, English first.
 
 ## Running it
 

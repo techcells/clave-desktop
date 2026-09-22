@@ -3,7 +3,7 @@ import {useState} from "react";
 import type {Blocker} from "../../shared/ipc";
 import {clave} from "../bridge";
 import {Button, Switch, useHeading} from "../components/Controls";
-import {BLOCKERS, COPY} from "../copy";
+import {blockerCopy, checkingPermissionLine, COPY} from "../copy";
 import {fixAction, statusSignature} from "../model/controls";
 import {firstBlocker, nothingReadLine} from "../model/views";
 import type {Shell} from "../shell";
@@ -84,7 +84,7 @@ export function Home({shell}: {shell: Shell}): ReactNode {
       {blocker !== null ? <Fix shell={shell} blocker={blocker} />
         // Only when nothing else stands in the way: a real blocker is the one thing to act on, and
         // the check ends by itself. A quiet line, no button — there is nothing to fix yet.
-        : status.checkingPermission ? <div><hr className="divider" /><p className="note">{COPY.home.checkingPermission}</p></div>
+        : status.checkingPermission ? <div><hr className="divider" /><p className="note">{checkingPermissionLine(shell.appInfo.platform)}</p></div>
         : null}
 
       <div>
@@ -100,7 +100,7 @@ export function Home({shell}: {shell: Shell}): ReactNode {
 
 /** One sentence, one button, and the button does the thing that actually fixes that blocker. */
 function Fix({shell, blocker}: {shell: Shell; blocker: Blocker}): ReactNode {
-  const copy = BLOCKERS[blocker];
+  const copy = blockerCopy(blocker, shell.appInfo.platform);
   const press = (): void | Promise<unknown> => {
     switch (fixAction(blocker)) {
       case "signIn": return shell.go("onboarding", "signIn");

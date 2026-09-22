@@ -282,7 +282,7 @@ async function start(): Promise<void> {
 
   const router = createIpcRouter({
     engine: current, downloader, reader: translocated ? {requestPermission: async () => undefined} : reader, recentApp: () => recentApp,
-    appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS, translocated, googleSignIn: MODE.realApi},
+    appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS, translocated, googleSignIn: MODE.realApi, platform: process.platform === "win32" ? "windows" : "mac"},
     openWhatLeaves: async () => { await shell.openPath(here("WHAT-LEAVES.md")); },
     openLicences: () => openLicences({path: here("THIRD-PARTY-LICENSES.txt"), exists: existsSync, open: async (path) => { await shell.openPath(path); }}),
     restartApp: () => { app.relaunch(); app.quit(); }

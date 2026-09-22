@@ -4,7 +4,7 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import type {EngineStatus, NothingReadWhy, UserSettings} from "../../shared/ipc";
 import {NOTHING_READ_WHY} from "../../shared/ipc";
-import {APP_FILE, BLOCKERS, CLAIMS, COPY, KNOWN_LIMITS, NOTHING_READ, PERMISSION_STEPS} from "../copy";
+import {APP_FILE, BLOCKERS, blockerCopy, checkingPermissionLine, CLAIMS, COPY, KNOWN_LIMITS, knownLimits, NOTHING_READ, PERMISSION_STEPS, privateWindowsLine, WINDOWS_COPY} from "../copy";
 import {downloadView, firstBlocker, gigabytes, isTranslocated, LONG_WAIT_MS, mustSignIn, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
 
 const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus => ({capture: "off", resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false, account: null});
@@ -145,6 +145,36 @@ describe("the permission step's copy", () => {
     const probe = COPY.onboarding.permission.steps("Probe Name.app");
     expect(probe[1]).toContain("Probe Name.app");
     expect(probe[1]).not.toContain(APP_FILE);
+  });
+});
+
+describe("the words for Windows", () => {
+  const windowsLines = [
+    blockerCopy("NO_PERMISSION", "windows").sentence, blockerCopy("NO_PERMISSION", "windows").action,
+    checkingPermissionLine("windows"), privateWindowsLine("windows"), ...knownLimits("windows"),
+    WINDOWS_COPY.permission.title, WINDOWS_COPY.permission.lead, WINDOWS_COPY.checkingOnboarding
+  ];
+
+  it("says nothing a Windows user cannot find: no System Settings, Screen Recording, menu bar, Chrome or Safari", () => {
+    for (const line of windowsLines) expect(line).not.toMatch(/System Settings|Screen Recording|menu bar|macOS|Applications|Chrome|Safari/);
+  });
+
+  it("names the one browser that is measured there, and keeps every other limit as it is", () => {
+    expect(privateWindowsLine("windows")).toContain("Microsoft Edge");
+    expect(privateWindowsLine("windows")).toContain("InPrivate");
+    expect(knownLimits("windows")).toHaveLength(KNOWN_LIMITS.length);
+    expect(knownLimits("windows").filter((line) => !KNOWN_LIMITS.includes(line))).toEqual([WINDOWS_COPY.addressLimit]);
+  });
+
+  it("leaves macOS, and a window told no platform, with the macOS words exactly", () => {
+    for (const platform of ["mac", undefined] as const) {
+      expect(blockerCopy("NO_PERMISSION", platform)).toBe(BLOCKERS.NO_PERMISSION);
+      expect(checkingPermissionLine(platform)).toBe(COPY.home.checkingPermission);
+      expect(privateWindowsLine(platform)).toBe(COPY.onboarding.privateWindows);
+      expect(knownLimits(platform)).toBe(KNOWN_LIMITS);
+    }
+    // Only NO_PERMISSION has Windows words; every other blocker reads the same everywhere.
+    expect(blockerCopy("MODEL_MISSING", "windows")).toBe(BLOCKERS.MODEL_MISSING);
   });
 });
 
