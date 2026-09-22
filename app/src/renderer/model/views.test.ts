@@ -1,4 +1,4 @@
-import {readdirSync, readFileSync, statSync} from "node:fs";
+import {existsSync, readdirSync, readFileSync, statSync} from "node:fs";
 import {join} from "node:path";
 import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
@@ -11,8 +11,10 @@ const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus =
 const settings = (onboardingStep: number): UserSettings => ({exclusions: [], excludedSites: [], reviewTime: "17:30", captureOn: false, onboardingStep});
 
 describe("the pitch", () => {
-  it("uses the five claims verbatim from the overall plan", () => {
-    const plan = readFileSync(new URL("../../../../docs/implementation-plan.md", import.meta.url), "utf8");
+  // The plan is internal and not in the public repo, so this only runs where the file exists.
+  const planUrl = new URL("../../../../docs/implementation-plan.md", import.meta.url);
+  it.skipIf(!existsSync(planUrl))("uses the five claims verbatim from the overall plan", () => {
+    const plan = readFileSync(planUrl, "utf8");
     const section = plan.slice(plan.indexOf("The claims:"), plan.indexOf("What we do not claim anywhere"));
     const canonical = [...section.matchAll(/^\d\. ([\s\S]*?)(?=^\d\. |\s*$(?![\s\S]))/gm)].map((m) => (m[1] as string).replace(/\s+/g, " ").trim());
     expect(canonical).toHaveLength(5);

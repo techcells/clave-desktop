@@ -38,3 +38,7 @@ coverage/
 *.pem
 *.p12
 *.provisionprofile
+
+# Internal docs (plans, handoff notes, specs, reviews); only the public what-leaves page is tracked
+docs/*
+!docs/WHAT-LEAVES.md

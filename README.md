@@ -62,10 +62,16 @@ pnpm --dir app smoke             # end-to-end smoke run, prints SMOKE OK
 | `app/native/reader` | Rust helper that captures the focused window and recognises text, talking JSON lines over stdio |
 | `app/scripts` | Build, native build, dev bundle and reader eval scripts |
 | `eval/` | Synthetic fixtures for the extraction pipeline; never real screen text |
-| `docs/` | Implementation plan, what-leaves page, handoff notes, specs and review records |
+| `docs/` | The what-leaves page (plans, specs and review records are kept internally) |
 
 ## Status
 
 Early, pre-release. The core pipeline, desktop shell and macOS reader are built and tested; the
-connection to the Clave backend is in progress. See [docs/HANDOFF.md](docs/HANDOFF.md) for where
-the work stands.
+connection to the Clave backend is in progress.
+
+## License
+
+Source-available under the [Clave Agent License](LICENSE.md). It's free for personal,
+non-commercial, educational and research use, and for a 14-day evaluation at any organization.
+Commercial use, embedding the code in a product, hosting it for others, or building a competing
+product requires a paid license from TeamEx ([contact@teamex.io](mailto:contact@teamex.io)).
