@@ -9,7 +9,7 @@
 // nothing runs at import. scripts/package/stage.mjs calls it before the manifest is written.
 import {spawnSync} from "node:child_process";
 import {existsSync, readFileSync} from "node:fs";
-import {dirname, join, posix} from "node:path";
+import {delimiter, dirname, join, posix} from "node:path";
 import {fileURLToPath} from "node:url";
 import {walk} from "./walk.mjs";
 
@@ -140,6 +140,47 @@ export function checkEntries(entries) {
   return problems;
 }
 
+/**
+ * The crates that end up inside the helper binary, from `cargo metadata` output: every package
+ * reachable from the root through NORMAL dependencies, stopping at proc-macro crates. A proc macro
+ * runs inside the compiler and is not linked into anything, and neither is what only it depends on
+ * (the `windows` crate's `windows-implement` pulls in `syn` and `unicode-ident`); build and dev
+ * dependencies are never followed either. `--filter-platform` has already dropped other systems'
+ * dependencies. An edge that states no kinds at all is followed, so an older cargo lists more, not less.
+ */
+export function linkedCrates(graph) {
+  const packages = new Map((graph?.packages ?? []).map((p) => [p.id, p]));
+  const nodes = new Map((graph?.resolve?.nodes ?? []).map((n) => [n.id, n]));
+  const isProcMacro = (pkg) => (pkg.targets ?? []).some((t) => (t.kind ?? []).includes("proc-macro"));
+  const linked = new Set();
+  const queue = [graph?.resolve?.root];
+  while (queue.length > 0) {
+    const node = nodes.get(queue.shift());
+    if (!node) continue;
+    for (const dep of node.deps ?? []) {
+      const kinds = dep.dep_kinds;
+      const normal = !Array.isArray(kinds) || kinds.length === 0 || kinds.some((k) => k?.kind === null);
+      const pkg = packages.get(dep.pkg);
+      if (!normal || !pkg || linked.has(dep.pkg) || isProcMacro(pkg)) continue;
+      linked.add(dep.pkg);
+      queue.push(dep.pkg);
+    }
+  }
+  return [...linked].map((id) => packages.get(id)).map((p) => ({name: p.name, version: p.version, licence: p.license ?? null, source: p.repository ?? undefined}));
+}
+
+/**
+ * The licence file's entry for a system runtime shipped beside the native binaries: the hand-kept
+ * description (`licences.fixed.json` runtimes) with the version and files of the copy that staging
+ * made. A refusal when either half is missing, so a runtime can never ship unlisted.
+ */
+export function runtimeEntry(fixed, runtime) {
+  if (!runtime) return {entry: null};
+  if (!fixed || typeof fixed.name !== "string" || typeof fixed.licence !== "string" || typeof fixed.source !== "string" || typeof fixed.note !== "string") return {error: "RUNTIME_ENTRY_MISSING"};
+  if (typeof runtime.version !== "string" || !Array.isArray(runtime.files) || runtime.files.length === 0) return {error: "RUNTIME_ENTRY_MISSING"};
+  return {entry: {name: fixed.name, version: runtime.version, files: [...runtime.files], licence: fixed.licence, copyright: fixed.copyright ?? "", source: fixed.source, note: fixed.note}};
+}
+
 /** The model's paragraph, or a refusal for a release build whose model licence is not confirmed. */
 export function modelSection(model, flavour) {
   if (!model || typeof model.name !== "string") return {error: "MODEL_ENTRY_MISSING"};
@@ -182,6 +223,14 @@ export function render(sections) {
   block("Runtime framework", [sections.electron]);
   lines.push("Chromium and its third-party components: their licences are in LICENSES.chromium.html beside this file.", "");
   block("Inference engine", sections.components);
+  // A system runtime is not open-source and is not judged by the allow-list: it is named, versioned,
+  // and pointed at the vendor's own redistribution terms (`runtimeEntry`). Windows only.
+  if (Array.isArray(sections.runtimes) && sections.runtimes.length > 0) {
+    lines.push(RULE, "System runtime (redistributable, not open source)", RULE, "");
+    for (const r of sections.runtimes) {
+      lines.push(`${r.name} ${r.version}`, `Files: ${r.files.join(", ")}`, r.source, `Licence: ${r.licence}`, r.copyright, "", r.note, "");
+    }
+  }
   block("Native reader helper: Rust crates (statically linked)", sections.crates);
   block("JavaScript packages", sections.packages);
   lines.push(RULE, "Language model (downloaded at set-up, not bundled)", RULE, "", sections.model, "");
@@ -204,7 +253,7 @@ const FIXED_PATH = join(dirname(fileURLToPath(import.meta.url)), "licences.fixed
  * Reads everything, checks it, renders it. Returns `{text, electronFiles}` or `{error, detail}`.
  * `root` is the staged asar root; `appDir` the checkout's app/; `cargo` the absolute cargo path.
  */
-export function generateLicences({root, appDir, flavour, cargo, env}) {
+export function generateLicences({root, appDir, flavour, cargo, env, rustTarget = "aarch64-apple-darwin", runtime = null}) {
   const fixed = JSON.parse(readFileSync(FIXED_PATH, "utf8"));
   const appPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const files = walk(root).filter((e) => e.kind === "file").map((e) => e.rel);
@@ -248,13 +297,15 @@ export function generateLicences({root, appDir, flavour, cargo, env}) {
   }
 
   const manifest = join(appDir, "native", "reader", "Cargo.toml");
-  const meta = spawnSync(cargo, ["metadata", "--offline", "--format-version", "1", "--filter-platform", "aarch64-apple-darwin", "--manifest-path", manifest], {stdio: ["ignore", "pipe", "pipe"], env: {...env, PATH: `${dirname(cargo)}:${env.PATH ?? ""}`}});
+  // The crates the helper links on the system being packaged: `--filter-platform` is that system's
+  // Rust target, so macOS lists the Apple frameworks' bindings and Windows the `windows` crates.
+  // PATH is set under whatever spelling the environment already uses (`Path` on Windows).
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+  const meta = spawnSync(cargo, ["metadata", "--offline", "--format-version", "1", "--filter-platform", rustTarget, "--manifest-path", manifest], {stdio: ["ignore", "pipe", "pipe"], env: {...env, [pathKey]: `${dirname(cargo)}${delimiter}${env[pathKey] ?? ""}`}});
   if (meta.status !== 0) return {error: "CARGO_METADATA_FAILED", detail: String(meta.status)};
   let graph;
   try { graph = JSON.parse(String(meta.stdout)); } catch { return {error: "CARGO_METADATA_FAILED", detail: "unparseable"}; }
-  const inResolve = new Set((graph.resolve?.nodes ?? []).map((n) => n.id));
-  const crates = (graph.packages ?? []).filter((p) => inResolve.has(p.id) && p.id !== graph.resolve?.root)
-    .map((p) => ({name: p.name, version: p.version, licence: p.license ?? null, source: p.repository ?? undefined}));
+  const crates = linkedCrates(graph);
   if (crates.length === 0) return {error: "NO_CRATES_FOUND"};
 
   const electronDist = join(appDir, "node_modules", "electron", "dist");
@@ -270,11 +321,13 @@ export function generateLicences({root, appDir, flavour, cargo, env}) {
   const components = (fixed.components ?? []).map((c) => ({name: c.name, version: c.version, licence: c.licence, copyright: c.copyright, source: c.source}));
   const model = modelSection(fixed.model, flavour);
   if (model.error) return {error: model.error};
+  const system = runtimeEntry(fixed.runtimes?.msvc, runtime);
+  if (system.error) return {error: system.error};
 
   const problems = checkEntries([electron, ...components, ...crates, ...packages]);
   if (problems.length > 0) return {error: problems[0].code, detail: `${problems[0].name}${problems[0].licence ? ` (${problems[0].licence})` : ""}`};
 
-  const rendered = render({app: {name: appPackage.name, version: appPackage.version}, electron, packages, crates, components, model: model.text, texts: fixed.texts ?? {}});
+  const rendered = render({app: {name: appPackage.name, version: appPackage.version}, electron, packages, crates, components, runtimes: system.entry ? [system.entry] : [], model: model.text, texts: fixed.texts ?? {}});
   if (rendered.error) return {error: rendered.error, detail: rendered.detail};
   const clean = cleanText(rendered.text);
   if (clean === null) return {error: "LICENCE_TEXT_UNREADABLE", detail: "rendered"};

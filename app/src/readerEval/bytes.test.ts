@@ -21,9 +21,10 @@
  */
 import {readdirSync, readFileSync, statSync} from "node:fs";
 import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 
-const HERE = new URL(".", import.meta.url).pathname;
+const HERE = fileURLToPath(new URL(".", import.meta.url));
 const APP = join(HERE, "..", "..");
 
 function filesUnder(dir: string, keep: (name: string) => boolean = () => true): string[] {

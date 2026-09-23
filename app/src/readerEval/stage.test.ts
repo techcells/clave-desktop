@@ -1,4 +1,5 @@
 import {tmpdir} from "node:os";
+import {join} from "node:path";
 import {describe, expect, it} from "vitest";
 import {BROWSER_WINDOW, TOOLBAR_CASES} from "./cases";
 import {
@@ -33,8 +34,9 @@ const url = "http://127.0.0.1:51234/chat.html?theme=light&size=14";
 describe("where a run's Chrome profile and generated scripts go", () => {
   it("is a folder of this run's own, under the OS temp directory", () => {
     const {dir, profileDir: profile} = evalScratchPaths(TMP, "a1b2c3d4e5f6");
-    expect(dir).toBe(`${TMP}/clave-reader-eval-a1b2c3d4e5f6`);
-    expect(profile).toBe(`${dir}/chrome-profile`);
+    // Joined as the function joins them: the same strings on macOS, backslashed on Windows.
+    expect(dir).toBe(join(TMP, "clave-reader-eval-a1b2c3d4e5f6"));
+    expect(profile).toBe(join(dir, "chrome-profile"));
     expect(evalScratchPaths(TMP, "ffffffffffff").dir).not.toBe(dir);   // per run, not per machine
   });
 

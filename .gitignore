@@ -40,6 +40,8 @@ coverage/
 *.p12
 *.provisionprofile
 
-# Internal docs (plans, handoff notes, specs, reviews); only the public what-leaves page is tracked
+# Internal docs (plans, handoff notes, specs, reviews); tracked: the public what-leaves page and the
+# Windows to-do list
 docs/*
 !docs/WHAT-LEAVES.md
+!docs/WINDOWS-TODO.md

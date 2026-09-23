@@ -125,6 +125,8 @@ export interface EngineDeps {
   fs: FileSystem; cipher: Cipher; dataDir: string;
   power: PowerSource; idleSeconds: () => number; now: Now; local: LocalTime; newId: () => string;
   appVersion: string; modelSha256: string; production: boolean;
+  /** Other names the window list may give this app's own window, excluded beside APP_NAME. */
+  otherSelfNames?: readonly string[];
   /** The daily "n statements to review" notification. */
   notifyReview: (count: number) => void;
   /** Shown once at launch when capture resumed by itself. */
@@ -240,7 +242,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
   const config = (): PipelineConfig => {
     const t = taxonomy.current();
     const s = settings.get();
-    return {exclusions: s.exclusions, excludedSites: s.excludedSites, selfApp: APP_NAME, taxonomyVersion: t?.version ?? "none", skills: t?.skills ?? [], competencies: t?.competencies ?? [], userNames: session.names()};
+    return {exclusions: s.exclusions, excludedSites: s.excludedSites, selfApp: [APP_NAME, ...(deps.otherSelfNames ?? [])], taxonomyVersion: t?.version ?? "none", skills: t?.skills ?? [], competencies: t?.competencies ?? [], userNames: session.names()};
   };
   const newPipeline = (): Pipeline => createPipeline(config(), {model, clock: {now, dayKey: (ms) => deps.local(ms).day}, newId: deps.newId});
   let pipeline = newPipeline();

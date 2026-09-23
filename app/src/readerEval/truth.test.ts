@@ -17,9 +17,10 @@
 import {createHash} from "node:crypto";
 import {readFileSync} from "node:fs";
 import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 
-const TRUTH_DIR = join(new URL(".", import.meta.url).pathname, "..", "..", "reader-eval", "truth");
+const TRUTH_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "reader-eval", "truth");
 
 const read = (name: string): string => readFileSync(join(TRUTH_DIR, `${name}.txt`), "utf8");
 const sha256 = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");

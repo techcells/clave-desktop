@@ -1,4 +1,5 @@
 import {readFileSync} from "node:fs";
+import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import {repairHomoglyphs} from "./homoglyphs";
 
@@ -7,7 +8,7 @@ import {repairHomoglyphs} from "./homoglyphs";
  * in core *source* files, not in tests, and reading the two files is the only way these assertions
  * can prove the core and the native reader still agree rather than restating the core's own opinion.
  */
-const HERE = new URL(".", import.meta.url).pathname;
+const HERE = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURE = `${HERE}../../../native/reader/fixtures/homoglyphs.json`;
 const RUST = `${HERE}../../../native/reader/src/text.rs`;
 

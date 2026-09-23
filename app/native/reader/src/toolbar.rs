@@ -13,7 +13,25 @@ use crate::text::Line;
 /// fraction of the window: a toolbar's height is fixed by the browser's chrome and does not grow
 /// with the window, so a fraction of a tall window would reach deep into the page. The caller
 /// multiplies by the display's pixel scale at capture time.
-const BANDS: &[(&str, f64)] = &[("com.google.Chrome", 82.0), ("com.apple.Safari", 41.0)];
+///
+/// Windows keys the table by executable name, which is what the Windows reader reports as the bundle
+/// id. Edge 153 on Windows 11 was measured on 2026-09-23 at 150% scaling with a fresh profile: the
+/// address row's lowest edge at 68.7 points, the InPrivate badge inside it (55.3 to 64.0), and the
+/// page's first line starting at 93.3. The table carries 68.7 plus 10%, as for the other two. That
+/// profile's interface was Russian; measured again in English (`--lang=en-US`, over http), the
+/// geometry is the same (address row 68.7, one icon to 71.3, page at 93.3) and the badge still reads
+/// `InPrivate`, which Edge does not translate. So Edge's band holds in either language.
+///
+/// Chrome 154 on the same machine, measured the same day at 150% scaling with throwaway profiles: the
+/// address row's lowest edge at 71.3 points, the Incognito badge inside it (58.7 to 70.0), and the
+/// page's first line starting at 94.7. The same with the bookmarks bar shown, which moves only the
+/// page (to 128.7), and at a device scale of 1 (the address row at 71.0 points, the page at 95).
+/// The table carries 71.3 plus 10%. That holds only for Chrome in English: the Russian badge came back
+/// from the recogniser as `OKHO B pexvwe VIHKorHVITO`, which matches nothing, so the Windows reader
+/// marks a Chrome it cannot show to be English as `band_withheld` (`win::chrome`), and such a window
+/// is refused before it is captured.
+const BANDS: &[(&str, f64)] =
+    &[("com.google.Chrome", 82.0), ("com.apple.Safari", 41.0), ("msedge.exe", 76.0), ("chrome.exe", 78.0)];
 
 /// The band this browser's chrome occupies, in PIXELS of a capture taken at `scale`, or `None` when
 /// the bundle id is not a browser whose toolbar has been measured.
@@ -63,6 +81,54 @@ mod tests {
         assert_eq!(band_px(Some("com.google.Chrome"), 2.0), Some(164.0));
         assert_eq!(band_px(Some("com.apple.Safari"), 1.0), Some(41.0));
         assert_eq!(band_px(Some("com.apple.Safari"), 2.0), Some(82.0));
+        assert_eq!(band_px(Some("msedge.exe"), 1.0), Some(76.0));
+        assert_eq!(band_px(Some("msedge.exe"), 1.5), Some(114.0));
+        assert_eq!(band_px(Some("chrome.exe"), 1.0), Some(78.0));
+        assert_eq!(band_px(Some("chrome.exe"), 1.5), Some(117.0));
+    }
+
+    #[test]
+    fn edge_on_windows_keeps_the_address_row_and_the_inprivate_badge_and_not_the_page() {
+        // The measured Edge capture at 150%: 1041 px tall, positions in points times 1.5.
+        let height = 1041.0;
+        let at_points = |text: &str, top: f64, bottom: f64| Line {
+            text: text.to_owned(),
+            x: 0.1,
+            right: 0.3,
+            top: top * 1.5 / height,
+            bottom: bottom * 1.5 / height,
+        };
+        let lines = [
+            at_points("CLAVE-BAND probe", 12.0, 28.0),
+            at_points("C:/Users/example/page.html", 54.7, 68.7),
+            at_points("InPrivate", 55.3, 64.0),
+            at_points("FIRST PAGE LINE", 93.3, 115.3),
+        ];
+        let strip = toolbar_text(&lines, Some("msedge.exe"), 1.5, height).expect("Edge is measured");
+        assert!(strip.contains("InPrivate") && strip.contains("page.html"), "{strip}");
+        assert!(!strip.contains("FIRST PAGE LINE"), "{strip}");
+    }
+
+    #[test]
+    fn chrome_on_windows_keeps_the_address_row_and_the_incognito_badge_and_not_the_page() {
+        // The measured Chrome capture at 150%: 1041 px tall, positions in points times 1.5.
+        let height = 1041.0;
+        let at_points = |text: &str, top: f64, bottom: f64| Line {
+            text: text.to_owned(),
+            x: 0.1,
+            right: 0.3,
+            top: top * 1.5 / height,
+            bottom: bottom * 1.5 / height,
+        };
+        let lines = [
+            at_points("CLAVE-BAND probe", 16.0, 28.0),
+            at_points("127.0.0.1:8765/probe.html", 56.7, 71.3),
+            at_points("Incognito", 58.7, 70.0),
+            at_points("FIRST PAGE LINE", 94.7, 114.7),
+        ];
+        let strip = toolbar_text(&lines, Some("chrome.exe"), 1.5, height).expect("Chrome is measured");
+        assert!(strip.contains("Incognito") && strip.contains("probe.html"), "{strip}");
+        assert!(!strip.contains("FIRST PAGE LINE"), "{strip}");
     }
 
     #[test]

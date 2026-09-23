@@ -97,6 +97,16 @@ describe("capture loop", () => {
     expect(loop.stats()).toEqual({windowChanged: 1});
   });
 
+  it("throws the text away when the reader withholds the window's band while it was being read", async () => {
+    // Same app, same title, but its toolbar can no longer be judged: the window the core approved is gone.
+    const {reader, ingested, loop, settle} = setup();
+    reader.duringRead = () => { reader.front = {app: "Code", title: "query.sql", bandWithheld: true}; };
+    loop.start();
+    await settle();
+    expect(ingested).toEqual([]);
+    expect(loop.stats()).toEqual({windowChanged: 1});
+  });
+
   it("throws the text away when the reader reports a different window than the one that was checked", async () => {
     const {reader, ingested, loop, settle} = setup();
     reader.nextRead = {ok: true, window: {app: "Messages", title: "Anna"}, text: "private"};

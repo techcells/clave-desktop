@@ -1,4 +1,10 @@
-export interface FrontWindow { app: string; bundleId?: string; title: string }
+/**
+ * `bandWithheld` is the reader saying that this browser's measured toolbar band does not hold for
+ * this window, so its private-window badge cannot be read: today only Chrome on Windows in a language
+ * other than English (`native/reader/src/win/chrome.rs`). Present only when true. Such a window is
+ * refused before it is captured.
+ */
+export interface FrontWindow { app: string; bundleId?: string; title: string; bandWithheld?: true }
 
 export interface WindowRead extends FrontWindow {
   text: string;
@@ -24,8 +30,10 @@ export interface PipelineConfig {
    * The app's own name in THIS build (it differs per flavour: "Clave Agent", "Clave Agent Internal"),
    * excluded like a built-in so the app never reads its own window whatever it is called. Optional:
    * the built-in list still names the release name, so a caller that omits it loses nothing there.
+   * A list when the operating system may know this process by more than one name: an unpackaged
+   * run is "Electron" to the window list, whatever the flavour calls it.
    */
-  selfApp?: string;
+  selfApp?: string | readonly string[];
   taxonomyVersion: string;
   skills: Skill[];
   competencies: Competency[];

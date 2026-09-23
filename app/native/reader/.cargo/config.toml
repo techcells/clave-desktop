@@ -1,0 +1,8 @@
+# The helper links the C runtime statically on Windows, so `clave-reader.exe` needs no Visual C++
+# Redistributable on the machine it runs on: a clean Windows has no vcruntime140.dll, and a helper
+# that cannot start would leave the app with no reader and no explanation. macOS is unaffected.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

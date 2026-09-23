@@ -1,0 +1,3 @@
+# LF everywhere, whatever the checkout's core.autocrlf says: tests compare fixtures and truth files
+# byte for byte, and a Windows checkout would otherwise turn every one of them into CRLF.
+* text=auto eol=lf

@@ -5,7 +5,7 @@ import {clave, useDownload} from "../bridge";
 import {Unreachable} from "../components/Boundary";
 import {Button, Field, Meter, Submit, useAction, useHeading} from "../components/Controls";
 import {EntryList} from "../components/EntryList";
-import {APP_FILE, BLOCKERS, CLAIMS, COPY, downloadProblem, KNOWN_LIMITS, PERMISSION_STEPS, SETTINGS_PROBLEMS, SIGN_IN_PROBLEMS} from "../copy";
+import {APP_FILE, BLOCKERS, CLAIMS, COPY, downloadProblem, knownLimits, PERMISSION_STEPS, privateWindowsLine, SETTINGS_PROBLEMS, SIGN_IN_PROBLEMS, WINDOWS_COPY} from "../copy";
 import type {Step} from "../model/views";
 import {STEPS, downloadView, gigabytes, isTranslocated, stillWaiting} from "../model/views";
 import type {Shell} from "../shell";
@@ -282,6 +282,18 @@ function PermissionAsk({shell}: {shell: Shell}): ReactNode {
   }, [askStatus]);
 
   const needsRestart = permission === "needsRestart" || shell.status.blockers.includes("PERMISSION_NEEDS_RESTART");
+  // Windows has no grant to walk through: this step is only reached there when window capture is
+  // missing altogether, so it says that, offers to look again, and has no steps to follow.
+  if (shell.appInfo.platform === "windows") {
+    return (
+      <>
+        <h1 className="title" tabIndex={-1} ref={heading}>{WINDOWS_COPY.permission.title}</h1>
+        <p className="lede">{WINDOWS_COPY.permission.lead}</p>
+        <p className="actions"><Button tone="ink" label={WINDOWS_COPY.noPermission.action} press={() => clave.requestPermission()} /></p>
+        <p className="note">{WINDOWS_COPY.checkingOnboarding}</p>
+      </>
+    );
+  }
   return (
     <>
       <h1 className="title" tabIndex={-1} ref={heading}>{COPY.onboarding.screenRecording}</h1>
@@ -346,10 +358,10 @@ function NeverRead({shell}: {shell: Shell}): ReactNode {
         problem={sentence(sitesProblem)}
         save={(excludedSites) => into(setSitesProblem)({excludedSites})}
       />
-      <p className="note">{COPY.onboarding.privateWindows}</p>
+      <p className="note">{privateWindowsLine(shell.appInfo.platform)}</p>
       <div>
         <p className="label">{COPY.onboarding.limits}</p>
-        <ul className="plain">{KNOWN_LIMITS.map((limit) => <li key={limit}>{limit}</li>)}</ul>
+        <ul className="plain">{knownLimits(shell.appInfo.platform).map((limit) => <li key={limit}>{limit}</li>)}</ul>
       </div>
       {sentence(stepProblem) === null ? null : <p className="problem">{sentence(stepProblem)}</p>}
       <p className="actions"><Button tone="ink" label={COPY.common.continue} press={() => into(setStepProblem)({onboardingStep: 5})} /></p>

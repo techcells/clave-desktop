@@ -1,4 +1,4 @@
-import type {Blocker, DownloadState, NothingReadWhy, SettingsProblem, SignInResult} from "../shared/ipc";
+import type {AppInfo, Blocker, DownloadState, NothingReadWhy, SettingsProblem, SignInResult} from "../shared/ipc";
 import {APP_NAME} from "../shared/flavour";
 
 /**
@@ -243,3 +243,46 @@ export const APP_FILE = `${COPY.appName}.app`;
 
 /** The permission step's three steps, with the name above already in them. The screen holds no words. */
 export const PERMISSION_STEPS: readonly string[] = COPY.onboarding.permission.steps(APP_FILE);
+
+/**
+ * The words for the system's own parts on Windows. Everything above is macOS's, and stays the
+ * default: a window that is not told its platform reads as macOS.
+ *
+ * Windows has no Screen Recording grant for desktop apps — the reader may capture any window — so
+ * the permission step is skipped there by the engine, and these sentences only appear in the two
+ * states Windows can actually reach: the reader's first answer not in yet (a moment after launch),
+ * and Windows.Graphics.Capture missing altogether (a Windows older than 10 version 1903, or an
+ * edition without it), which nothing in Settings can fix.
+ */
+export const WINDOWS_COPY = {
+  noPermission: {sentence: "Windows cannot capture windows on this machine.", action: "Check again"},
+  checkingHome: "Checking window capture. This can take a moment after the app starts.",
+  permission: {
+    title: "Window capture",
+    lead: "This app reads the window in front with Windows' own window capture, which needs Windows 10 version 1903 or later. Windows says it is not available here. It keeps no picture."
+  },
+  checkingOnboarding: "Waiting for window capture",
+  // Measured on Windows: Edge's and Chrome's toolbar strips (reader: toolbar.rs). Chrome only in
+  // English, because its incognito badge is matched as an English word (reader: win/chrome.rs).
+  privateWindows: "Microsoft Edge and Google Chrome are read, except their InPrivate and Incognito windows. Chrome is read only when its language is English. Other browsers are not read yet.",
+  addressLimit: "In Microsoft Edge and Google Chrome it only reads a page while the address is visible."
+} as const;
+
+type CopyPlatform = AppInfo["platform"];
+const onWindows = (platform: CopyPlatform): boolean => platform === "windows";
+
+/** A blocker's sentence and button, in this platform's words. */
+export const blockerCopy = (blocker: Blocker, platform: CopyPlatform): BlockerCopy =>
+  blocker === "NO_PERMISSION" && onWindows(platform) ? WINDOWS_COPY.noPermission : BLOCKERS[blocker];
+
+/** Which browsers are read, for onboarding and Settings. */
+export const privateWindowsLine = (platform: CopyPlatform): string =>
+  onWindows(platform) ? WINDOWS_COPY.privateWindows : COPY.onboarding.privateWindows;
+
+/** Home's quiet line while the reader's first permission answer is not in yet. */
+export const checkingPermissionLine = (platform: CopyPlatform): string =>
+  onWindows(platform) ? WINDOWS_COPY.checkingHome : COPY.home.checkingPermission;
+
+/** The known limits, with the one line that names browsers in this platform's browsers. */
+export const knownLimits = (platform: CopyPlatform): readonly string[] =>
+  onWindows(platform) ? KNOWN_LIMITS.map((limit) => (limit.startsWith("In Chrome and Safari") ? WINDOWS_COPY.addressLimit : limit)) : KNOWN_LIMITS;

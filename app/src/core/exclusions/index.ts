@@ -22,8 +22,16 @@ const isBrowser = (app: string) => {
   const name = app.trim().toLowerCase();
   return BROWSERS.some((browser) => name === browser || name.startsWith(`${browser} `));
 };
-/** Exact, and deliberately not a prefix: a variant is a browser, but its strip height is not measured. */
-const isMeasuredBrowser = (app: string) => MEASURED_BROWSERS.includes(app.trim().toLowerCase());
+/**
+ * Exact, and deliberately not a prefix: a variant is a browser, but its strip height is not measured.
+ * The bundle id must be one the band was measured for; a window with none matches only a `null`
+ * entry (see `MEASURED_BROWSERS`).
+ */
+const isMeasuredBrowser = (front: FrontWindow) => {
+  const name = front.app.trim().toLowerCase();
+  const ids = Object.hasOwn(MEASURED_BROWSERS, name) ? MEASURED_BROWSERS[name] : undefined;
+  return ids !== undefined && ids.includes(front.bundleId ?? null);
+};
 /** The reader is another process, so a front window is checked like any other outside input. */
 const wellFormed = (front: unknown): front is FrontWindow =>
   typeof front === "object" && front !== null
@@ -34,7 +42,9 @@ export function createExclusions(input: {exclusions: unknown; excludedSites: unk
   const builtIn = new Set(BUILT_IN_EXCLUSIONS.map((name) => name.toLowerCase()));
   // The app's own name in this build joins the built-ins (packaging: an internal build is "Clave Agent
   // Internal"). Anything but a non-blank string is ignored: the built-in release name still stands.
-  if (typeof input.selfApp === "string" && input.selfApp.trim().length > 0) builtIn.add(input.selfApp.trim().toLowerCase());
+  for (const name of Array.isArray(input.selfApp) ? input.selfApp : [input.selfApp]) {
+    if (typeof name === "string" && name.trim().length > 0) builtIn.add(name.trim().toLowerCase());
+  }
   const user = parseRules(input.exclusions);
   const sites = parseSites(input.excludedSites);
   const problems = [...user.problems, ...sites.problems];
@@ -48,7 +58,10 @@ export function createExclusions(input: {exclusions: unknown; excludedSites: unk
       if (!wellFormed(front) || !front.app.trim() || !front.title.trim()) return "unknownWindow";
       if (builtIn.has(front.app.trim().toLowerCase())) return "excludedApp";
       // Decided before anything is captured: a browser whose toolbar strip the reader cannot find is not read.
-      if (isBrowser(front.app) && !isMeasuredBrowser(front.app)) return "excludedApp";
+      if (isBrowser(front.app) && !isMeasuredBrowser(front)) return "excludedApp";
+      // Nor is a window the reader says its measured band does not hold for (Chrome on Windows in a
+      // language other than English), browser by name or not: the flag is the reader's own verdict.
+      if (front.bandWithheld === true) return "excludedApp";
       const hit = matchRule(user.rules, front);
       if (hit === "app") return "excludedApp";
       if (hit === "title") return "excludedTitle";
@@ -93,7 +106,7 @@ export function createExclusions(input: {exclusions: unknown; excludedSites: unk
       // (`before`), so `after` is only its safety net; the position of the address field inside the
       // strip was measured for these two and for no others, so there is no strip of a known shape
       // to judge. Non-browsers never reach here at all.
-      if (isMeasuredBrowser(front.app) && !showsAddress(toolbarText)) return "unknownWindow";
+      if (isMeasuredBrowser(front) && !showsAddress(toolbarText)) return "unknownWindow";
       return null;
     }
   };

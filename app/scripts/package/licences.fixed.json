@@ -16,6 +16,15 @@
       "source": "https://github.com/ggml-org/ggml"
     }
   ],
+  "runtimes": {
+    "msvc": {
+      "name": "Microsoft Visual C++ Runtime",
+      "licence": "Microsoft Software License Terms for Visual Studio: Distributable Code",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "source": "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution",
+      "note": "Windows builds only. Unmodified app-local copies of the redistributable files named above, placed beside the inference engine's binaries, which need them; Microsoft lists these files as Distributable Code that may be redistributed with an application. They are not open-source software and are not covered by the licences in this file's appendix (owner decision, 2026-09-23)."
+    }
+  },
   "model": {
     "name": "Qwen3.5-4B, GGUF Q4_K_M quantisation published by unsloth",
     "source": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF",

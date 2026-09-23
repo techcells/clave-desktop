@@ -60,7 +60,9 @@ describe("what pgrep's answer means for a build about to replace the bundle", ()
   });
 });
 
-describe("which bundle a run is about to write, and whether the guard applies to it", () => {
+// The dev bundle is a macOS .app under ~/Applications and dev-bundle.mjs refuses to run anywhere else
+// (NOT_MACOS), so its paths are POSIX paths by definition; on Windows `resolve` would drive-root them.
+describe.skipIf(process.platform === "win32")("which bundle a run is about to write, and whether the guard applies to it", () => {
   it("writes to ~/Applications when no --out is given, and that is the guarded one", () => {
     expect(resolveOutDir(["node", "dev-bundle.mjs"], HOME)).toEqual({dir: DEFAULT, defaultLocation: true});
   });

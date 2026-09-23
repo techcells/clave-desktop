@@ -25,6 +25,7 @@ import {createReadyDownloader} from "../standins/readyDownloader";
 import {createSmokeCipher} from "../standins/smokeCipher";
 import {createStubApi} from "../standins/stubApi";
 import {createPowerSource, createSafeStorageCipher, createUtilityHostLink} from "./adapters";
+import {APP_IDS} from "./appId";
 import {watchBattery} from "./batteryLevel";
 import {devEnv} from "./devEnv";
 import {resolveApiUrl} from "./apiUrl";
@@ -49,6 +50,7 @@ const WINDOW = {width: 420, height: 600, useContentSize: true};
 const WINDOW_PARTITION = "clave-window";
 const DEFAULT_MODEL_URL = "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf";
 const here = (file: string) => join(__dirname, file);
+const HELPER_NAME = process.platform === "win32" ? "clave-reader.exe" : "clave-reader";
 /** The one URL this app ever loads. Computed once, so an IPC sender can be compared against it exactly. */
 const RENDERER_URL = pathToFileURL(here("renderer/index.html")).toString();
 
@@ -154,6 +156,9 @@ function showWindow(): void {
       nodeIntegration: false, webSecurity: true, spellcheck: false, devTools: DEV
     }
   });
+  // macOS keeps the application menu in the menu bar; everywhere else Electron's default File/Edit/
+  // View/Window menu is drawn inside the window, above a page laid out at exactly 420 x 600.
+  if (process.platform !== "darwin") window.setMenu(null);
   window.once("ready-to-show", () => window?.show());
   window.on("close", (event) => {
     // Hiding instead of closing is only right while there is still a tray and an engine to come back
@@ -174,7 +179,10 @@ function refreshTray(status: EngineStatus): void {
   if (key === trayShowing) return;
   trayShowing = key;
   const current = engine;
-  tray.setTitle(TRAY_TITLE[trayState(status)] + (status.pending > 0 ? ` ${status.pending}` : ""));
+  const title = TRAY_TITLE[trayState(status)] + (status.pending > 0 ? ` ${status.pending}` : "");
+  // Only macOS draws a tray title; elsewhere the same few characters go into the hover text.
+  if (process.platform === "darwin") tray.setTitle(title);
+  else tray.setToolTip(`${APP_NAME} ${title}`);
   tray.setContextMenu(Menu.buildFromTemplate([
     {label: status.capture === "on" ? (status.nothingRead ? COPY.tray.onNothing : COPY.tray.on) : COPY.tray.off,
       type: "checkbox", checked: status.capture === "on",
@@ -214,9 +222,12 @@ async function start(): Promise<void> {
     ? createGoogleSignIn({baseUrl: apiUrl.url, listen: createLoopbackListener, openExternal: (url) => shell.openExternal(url), randomState: () => randomBytes(32).toString("base64url"), timeoutMs: OAUTH_TIMEOUT_MS})
     : undefined;
   // The helper is a plain child of this process, inside the same bundle: that is what lets the Screen
-  // Recording grant given to the app reach it (phase 0, P1).
+  // Recording grant given to the app reach it (phase 0, P1). On Windows it is a console program, so
+  // Windows gives it a console of its own. On Windows 11 that console was measured to have no window
+  // at all (2026-09-23), but Node documents that one may be shown without `windowsHide`, and nothing
+  // guarantees the same on Windows 10 or with another default terminal, so it is asked for explicitly.
   const real = REAL_READER
-    ? createRealReader({helperPath: chooseHelperPath([join(dirname(process.execPath), "clave-reader"), here("native/clave-reader")], existsSync), exists: existsSync, spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"]}), now: () => Date.now()})
+    ? createRealReader({helperPath: chooseHelperPath([join(dirname(process.execPath), HELPER_NAME), here(`native/${HELPER_NAME}`)], existsSync), exists: existsSync, spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true}), now: () => Date.now()})
     : null;
   const reader: Reader = real ? real.reader : standInReader();
   // Running from macOS's quarantine copy: a grant given here would belong to a path nobody can find
@@ -234,7 +245,12 @@ async function start(): Promise<void> {
     spawn: () => createUtilityHostLink(() => utilityProcess.fork(here("model-host.mjs"), [SCRIPTED_MODEL ? "scripted" : downloader.filePath()], {serviceName: "Clave model"}))
   });
 
-  const battery = watchBattery(() => new Promise((resolve, reject) => execFile("/usr/bin/pmset", ["-g", "batt"], (error, stdout) => (error ? reject(error) : resolve(stdout)))));
+  // Windows has no pmset; WMI's charge figure is printed as "NN%" so the same parser reads it. A
+  // desktop with no battery prints a bare "%", which parses as no battery.
+  const batteryCommand: [string, string[]] = process.platform === "win32"
+    ? ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[string](Get-CimInstance Win32_Battery | Select-Object -First 1).EstimatedChargeRemaining + [char]37"]]
+    : ["/usr/bin/pmset", ["-g", "batt"]];
+  const battery = watchBattery(() => new Promise((resolve, reject) => execFile(batteryCommand[0], batteryCommand[1], {windowsHide: true}, (error, stdout) => (error ? reject(error) : resolve(stdout)))));
   teardown.push(() => battery.stop());
   /**
    * The last app in front that was not this one, for Settings' "Exclude <app>" button — the user
@@ -258,6 +274,9 @@ async function start(): Promise<void> {
     idleSeconds: () => (SMOKE ? 0 : powerMonitor.getSystemIdleTime()),
     now: () => Date.now(), local: systemLocalTime, newId: () => randomUUID(),
     appVersion: app.getVersion(), modelSha256: SCRIPTED_MODEL ? "scripted" : PINNED_MODEL.sha256, production: MODE.production,
+    // Unpackaged, this process is Electron's own executable, and the window list names it "Electron"
+    // (on Windows from its version resource). A packaged build carries the flavour's name instead.
+    otherSelfNames: app.isPackaged ? [] : ["Electron"],
     notifyReview: (count) => notify(COPY.notify.review(count), {onClick: showWindow}),
     notifyCaptureResumed: () => notify(COPY.notify.resumed, {silent: true}),
     ...(googleSignIn ? {googleSignIn} : {})
@@ -267,7 +286,7 @@ async function start(): Promise<void> {
 
   const router = createIpcRouter({
     engine: current, downloader, reader: translocated ? {requestPermission: async () => undefined} : reader, recentApp: () => recentApp,
-    appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS, translocated, googleSignIn: MODE.realApi},
+    appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS, translocated, googleSignIn: MODE.realApi, platform: process.platform === "win32" ? "windows" : "mac"},
     openWhatLeaves: async () => { await shell.openPath(here("WHAT-LEAVES.md")); },
     openLicences: () => openLicences({path: here("THIRD-PARTY-LICENSES.txt"), exists: existsSync, open: async (path) => { await shell.openPath(path); }}),
     restartApp: () => { app.relaunch(); app.quit(); }
@@ -285,8 +304,11 @@ async function start(): Promise<void> {
   powerMonitor.on("suspend", () => current.system("suspend"));
   powerMonitor.on("resume", () => current.system("resume"));
 
-  tray = new Tray(nativeImage.createEmpty());
+  // macOS shows the tray as its title alone; Windows shows only an image, so it gets the app icon.
+  tray = new Tray(process.platform === "darwin" ? nativeImage.createEmpty() : nativeImage.createFromPath(here("tray.png")).resize({width: 32, height: 32}));
   tray.setToolTip(APP_NAME);
+  // A Windows tray icon is clicked, not opened like a menu-bar item: a left click brings the window up.
+  if (process.platform !== "darwin") tray.on("click", showWindow);
   current.onStatus(refreshTray);
   refreshTray(current.status());
   showWindow();
@@ -312,6 +334,9 @@ async function start(): Promise<void> {
 }
 
 app.setName(APP_NAME);                                // before the lock, so both instances agree on who they are
+// Windows files the taskbar entry and every notification under this id; without it the review
+// notification is shown under a generic Electron id, or not at all (see appId.ts).
+if (process.platform === "win32") app.setAppUserModelId(APP_IDS[FLAVOUR]);
 if (!app.requestSingleInstanceLock()) app.quit();     // two instances would mean two sixty-minute buffers
 else {
   app.on("second-instance", () => { if (started) showWindow(); else showRequested = true; });

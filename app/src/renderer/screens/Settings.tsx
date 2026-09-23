@@ -5,7 +5,7 @@ import {clave, useAsked} from "../bridge";
 import {Button, Field, Submit, useAction, useHeading} from "../components/Controls";
 import {EntryList} from "../components/EntryList";
 import {FLAVOUR} from "../../shared/flavour";
-import {COPY, SETTINGS_PROBLEMS} from "../copy";
+import {COPY, privateWindowsLine, SETTINGS_PROBLEMS} from "../copy";
 import type {Shell} from "../shell";
 
 /**
@@ -64,7 +64,7 @@ export function Settings({shell}: {shell: Shell}): ReactNode {
           </p>
         )}
         {/* Not an entry the user can remove: which browsers are read is decided by what the reader can measure. */}
-        <p className="note">{COPY.onboarding.privateWindows}</p>
+        <p className="note">{privateWindowsLine(appInfo.platform)}</p>
       </EntryList>
 
       <EntryList

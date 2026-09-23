@@ -25,7 +25,8 @@ export const NOTHING_READ_WHY = ["notAllowed", "noWindow", "other"] as const;
 export interface UserSettings { exclusions: string[]; excludedSites: string[]; reviewTime: string; captureOn: boolean; onboardingStep: number }
 /** `translocated`: macOS is running the app from its quarantine copy; the window shows "move to Applications" and nothing asks for Screen Recording. Optional so a build without the check reads as not translocated. */
 export type OpenLicencesResult = "opened" | "LICENCES_MISSING";
-export interface AppInfo { version: string; modelSha256: string; modelSizeBytes: number; standIns: boolean; translocated?: boolean; googleSignIn?: boolean }
+/** `platform`: whose words the window uses for the system's own parts (capture, browsers). Absent reads as macOS, the first platform. */
+export interface AppInfo { version: string; modelSha256: string; modelSizeBytes: number; standIns: boolean; translocated?: boolean; googleSignIn?: boolean; platform?: "mac" | "windows" }
 
 export interface ClaveBridge {
   status(): Promise<EngineStatus>;

@@ -302,8 +302,16 @@ fn stop_now(cancel: &AtomicBool, budget: &Budget) -> Option<Stop> {
 /// them is a different window.
 ///
 /// It says nothing about which window was captured; that half is in [`still_in_front`].
+///
+/// A window whose band is withheld is never approved, whatever `expect` says: the app refuses one
+/// on sight, so a window that carries the flag now is not the window the app judged. Checked here
+/// rather than only in the app so that it holds at all three checks of a read, and against an app
+/// too old to know the flag.
 fn is_approved(window: &WindowInfo, expect: &Expected) -> bool {
-    window.app == expect.app && window.bundle_id == expect.bundle_id && window.title == expect.title
+    !window.band_withheld
+        && window.app == expect.app
+        && window.bundle_id == expect.bundle_id
+        && window.title == expect.title
 }
 
 /// Ask the window server again and answer whether the screen is still showing the window this read
@@ -691,7 +699,6 @@ mod tests {
             self.scale = scale;
             self
         }
-
         fn shots(mut self, shots: impl IntoIterator<Item = Shot>) -> Self {
             self.shots = RefCell::new(shots.into_iter().collect());
             self
@@ -783,7 +790,13 @@ mod tests {
             app: "Some App".to_owned(),
             bundle_id: bundle.map(str::to_owned),
             title: "Some Title".to_owned(),
+            band_withheld: false,
         }
+    }
+
+    /// The same window, as Windows reports a Chrome it cannot show to be English.
+    fn withheld(window: WindowInfo) -> WindowInfo {
+        WindowInfo { band_withheld: true, ..window }
     }
 
     /// A line whose box runs from `top_px` to `bottom_px` down the fake's 700 px frame, and from `x`
@@ -1560,6 +1573,7 @@ mod tests {
                 app: "Some App".to_owned(),
                 bundle_id: Some(SAFARI.to_owned()),
                 title: "Some Title".to_owned(),
+                band_withheld: false,
             }
         );
     }
@@ -1591,6 +1605,28 @@ mod tests {
         let (_, text, toolbar) = ok_of(read(&fake).0);
         assert_eq!(text, "example.com/path\npage body");
         assert_eq!(toolbar.as_deref(), Some("example.com/path"));
+    }
+
+    #[test]
+    fn a_window_whose_band_is_withheld_is_never_captured() {
+        // Chrome on Windows in Russian, read at the request of an app that approved its three fields
+        // anyway (an app too old to know the flag): the window is not the one the app judged.
+        let fake = FakePlatform::new().window(Some(withheld(window(11, Some(CHROME)))));
+        let expect = approving(&window(11, Some(CHROME)));
+        let ((answer, _), _) = read_expecting(&fake, Some(&expect));
+        assert_eq!(answer, Some(ReadAnswer::Fail(FailReason::WindowGone)));
+        assert_eq!(fake.capture_calls.get(), 0);
+    }
+
+    #[test]
+    fn a_window_whose_band_is_withheld_mid_read_is_never_recognised() {
+        // Approved and captured, then withheld by the time of the check after the capture.
+        let chrome = window(11, Some(CHROME));
+        let fake = FakePlatform::new().windows([Some(chrome.clone()), Some(withheld(chrome.clone()))]);
+        let ((answer, _), _) = read_expecting(&fake, Some(&approving(&chrome)));
+        assert_eq!(answer, Some(ReadAnswer::Fail(FailReason::WindowGone)));
+        assert_eq!(fake.capture_calls.get(), 1);
+        assert_eq!(fake.recognise_calls.get(), 0);
     }
 
     #[test]

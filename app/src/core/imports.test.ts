@@ -1,8 +1,9 @@
 import {readdirSync, readFileSync, statSync} from "node:fs";
 import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 
-const ROOT = new URL(".", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const FORBIDDEN = [
   "fs", "node:fs", "fs/promises", "node:fs/promises", "net", "node:net", "http", "node:http",
   "https", "node:https", "child_process", "node:child_process", "electron", "dgram", "node:dgram"

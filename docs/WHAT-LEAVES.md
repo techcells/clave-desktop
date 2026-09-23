@@ -39,7 +39,8 @@ after set-up.
 
 - In memory only, for at most sixty minutes: the text that was read, already stripped of passwords,
   keys, emails, card and phone numbers. It is gone when you quit.
-- On disk, encrypted with your Keychain: your sign-in token and the display names on your account,
+- On disk, encrypted with your Keychain on macOS, or with your Windows account's data protection on
+  Windows: your sign-in token and the display names on your account,
   the statements waiting for your answer, and approved statements that have not been uploaded yet.
   A statement Clave refuses (for example because the skill it names has since been retired) was
   sent but not kept: it is removed from that waiting list and is not in "Sent"; the log records only

@@ -82,6 +82,9 @@ const css = join(out, "renderer/main.css");
 if (!existsSync(css)) writeFileSync(css, "");
 cpSync(join(app, "src/standins/taxonomy.json"), join(out, "standins-taxonomy.json"));
 cpSync(whatLeaves, join(out, "WHAT-LEAVES.md"));
+// The tray icon. macOS draws the tray as text (●/○/!) and never loads it; Windows has no tray text,
+// and a tray with no image there is an invisible one.
+cpSync(join(app, "build/icon-preview.png"), join(out, "tray.png"));
 // What this dist IS, for the staging step (which refuses a dist built for another flavour) and for
 // About. The version is the app's own from package.json; the build number is the UTC minute.
 const version = JSON.parse(readFileSync(join(app, "package.json"), "utf8")).version;
@@ -119,10 +122,11 @@ writeFileSync(join(out, "bundled-packages.json"), JSON.stringify(uniquePackages(
 // The native reader helper, when it has been built (pnpm --dir app build:native). dist/ was wiped a
 // few lines up, so it is copied in on every build; without it the app still builds, and asking for the
 // real reader then fails at launch with READER_HELPER_MISSING rather than here.
-const helper = join(app, "native/reader/target/release/clave-reader");
+const helperName = process.platform === "win32" ? "clave-reader.exe" : "clave-reader";
+const helper = join(app, "native/reader/target/release", helperName);
 if (existsSync(helper)) {
   mkdirSync(join(out, "native"), {recursive: true});
-  cpSync(helper, join(out, "native/clave-reader"));
+  cpSync(helper, join(out, "native", helperName));
 }
 
 // The dev preview: the same App and the same stylesheet, mounted in a browser against an in-memory

@@ -543,7 +543,8 @@ describe("the reveal channel, end to end, under the variant", () => {
       const {deps} = world({answer: () => nasty});
       await runToolbar({...deps, notSecure: true, reveal: true, limit: 2, writeReveal: (rows) => { gate.reveal(rows); }});
       expect(existsSync(path)).toBe(true);
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+      // POSIX bits only: Windows reports 0o666 for every file.
+      if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
       const text = readFileSync(path, "utf8");
       expect(text).not.toContain(ESC);
       expect(text).not.toContain(RLO);

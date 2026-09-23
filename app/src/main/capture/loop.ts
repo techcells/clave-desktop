@@ -316,7 +316,7 @@ export function createCaptureLoop(deps: {
       const after = parseFrontWindow(await withReaderTimeout(reader.frontWindow(), READER_CALL_TIMEOUT_MS));
       calling = null;
       if (mine !== generation) return plain("stopped");
-      if (!after || after.app !== front.app || after.title !== front.title) return plain("windowChanged");
+      if (!after || after.app !== front.app || after.title !== front.title || after.bandWithheld === true) return plain("windowChanged");
       if (result.window.app !== front.app || result.window.title !== front.title) return plain("windowChanged");
 
       const outcome = pipeline.ingest({...front, text: result.text, ...(result.toolbarText === undefined ? {} : {toolbarText: result.toolbarText}), at: now()});

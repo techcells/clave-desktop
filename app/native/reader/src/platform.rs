@@ -13,12 +13,20 @@ use crate::text::Line;
 /// `title` is empty rather than absent when the window has no name: the protocol always carries a
 /// title string, and "" is an honest "this window has no title", where a missing key would look
 /// like a helper that failed to look.
+///
+/// `band_withheld` is true for a browser whose measured toolbar band does not hold for THIS window.
+/// A band is a height, and the private-window badge inside it is a WORD: the app finds a private
+/// window by reading that word, so a band measured in one interface language says nothing about a
+/// browser showing another. The app refuses such a window before anything is captured, and the
+/// scheduler never captures one whatever it is asked (see `is_approved`). Only Windows ever sets it,
+/// for a Chrome it cannot show to be in English (see `win::chrome`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowInfo {
     pub window_id: u32,
     pub app: String,
     pub bundle_id: Option<String>,
     pub title: String,
+    pub band_withheld: bool,
 }
 
 /// A captured window: its pixels, the display's pixel scale, and the platform's own handle to the
@@ -50,6 +58,9 @@ pub struct Captured<I> {
 /// four different places — so drawing them costs nothing and is the difference between a diagnosis
 /// and a guess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Windows has no capture grant to refuse and no separate window-list query to come back empty, so
+// `Refused` and `NoContent` are only ever built by `macos::capture` (and by the tests).
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub enum CaptureError {
     /// The system refused the capture (`SCStreamErrorDomain` -3801): the Screen Recording grant is
     /// not in force for whatever app is responsible for this process.

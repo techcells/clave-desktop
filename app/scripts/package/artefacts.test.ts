@@ -8,11 +8,18 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as artefactsScript from "./artefacts.mjs";
 
-const {artefactBaseName, parseNotarizeArg, notarizeDecision, dmgCommand, zipCommand, copyAppCommand, signDmgCommand, notarySubmitCommand, notaryLogCommand, stapleCommand, notaryStatus, notaryResult, signatureChain, checkPlan, checkProblems} = artefactsScript as {
+const {artefactBaseName, parseNotarizeArg, notarizeDecision, dmgCommand, zipCommand, copyAppCommand, signDmgCommand, notarySubmitCommand, notaryLogCommand, stapleCommand, notaryStatus, notaryResult, signatureChain, checkPlan, checkProblems,
+  INSTALLER_APP_IDS, WINDOWS_MIN_VERSION, innoValue, innoScript, windowsArtefactDecision, winZipCommand} = artefactsScript as {
+  INSTALLER_APP_IDS: Record<string, string>;
+  WINDOWS_MIN_VERSION: string;
+  innoValue: (value: unknown) => string;
+  innoScript: (a: Record<string, string>) => string;
+  windowsArtefactDecision: (a: {flavour: string; report: unknown}) => {ok?: true; error?: string};
+  winZipCommand: (a: {bundleDir: string; folderName: string; zipPath: string}) => [string, string[]];
   notaryLogCommand: (a: {id: string; profile: string}) => [string, string[]];
   notaryResult: (output: unknown) => {status: string | null; id: string | null};
   signatureChain: (dvv: unknown) => {authorities: string[]; teamIdentifier: string | null};
-  artefactBaseName: (info: unknown) => string | null;
+  artefactBaseName: (info: unknown, arch?: string) => string | null;
   parseNotarizeArg: (argv: string[]) => {profile?: string | null; error?: string};
   notarizeDecision: (a: {flavour: string; report: unknown; profile: string | null}) => {profile?: string; skip?: boolean; error?: string};
   dmgCommand: (a: {root: string; volumeName: string; dmgPath: string}) => [string, string[]];
@@ -38,6 +45,62 @@ describe("artefactBaseName", () => {
     expect(artefactBaseName({...REPORT, appName: 5})).toBeNull();
     expect(artefactBaseName({...REPORT, appName: "Clave/Agent:X"})).toBe("ClaveAgentX-0.1.0-20260922.0815-arm64");
     expect(artefactBaseName(null)).toBeNull();
+  });
+});
+
+describe("Windows: the installer and the ZIP", () => {
+  const WIN = {flavour: "internal", platform: "win32", fused: true, signed: false};
+  const script = innoScript({flavour: "internal", appName: "Clave Agent Internal", version: "0.1.1", fileVersion: "0.1.1.0", publisher: "Clave",
+    appUserModelId: "dev.clave.agent.internal", sourceDir: "C:\\Temp\\clave-iscc-x\\app", iconPath: "C:\\repo\\app\\build\\icon.ico",
+    outputDir: "C:\\repo\\app\\out\\internal\\artefacts.partial", outputBaseName: "Clave-Agent-Internal-0.1.1-20260923.1200-x64-setup"});
+  const lines = script.split("\r\n");
+
+  it("names the Windows artefacts for x64", () => {
+    expect(artefactBaseName(REPORT, "x64")).toBe("Clave-Agent-Internal-0.1.0-20260922.0815-x64");
+  });
+
+  it("keeps each flavour's installer id fixed, since a changed one installs beside the old app instead of over it", () => {
+    expect(INSTALLER_APP_IDS).toEqual({internal: "A8670C1C-E426-458C-A43C-79AA5B652C60", release: "C2EDC4C4-FB80-4F50-A645-04DCA45A2DD1"});
+    expect(lines).toContain("AppId={{A8670C1C-E426-458C-A43C-79AA5B652C60}");
+    expect(() => innoScript({flavour: "dev"} as Record<string, string>)).toThrow("INSTALLER_FLAVOUR_UNKNOWN");
+  });
+
+  it("installs per user, with no administrator prompt, on x64 Windows new enough to capture windows", () => {
+    for (const line of ["PrivilegesRequired=lowest", "DefaultDirName={autopf}\\Clave Agent Internal", "ArchitecturesAllowed=x64compatible", "ArchitecturesInstallIn64BitMode=x64compatible"]) expect(lines).toContain(line);
+    expect(WINDOWS_MIN_VERSION).toBe("10.0.18362");
+    expect(lines).toContain("MinVersion=10.0.18362");
+    expect(script).not.toMatch(/PrivilegesRequired=admin|PrivilegesRequiredOverridesAllowed/);
+  });
+
+  it("gives the Start menu shortcut the app's notification id, and closes a running copy before an upgrade", () => {
+    expect(lines).toContain('Name: "{autoprograms}\\Clave Agent Internal"; Filename: "{app}\\Clave Agent Internal.exe"; AppUserModelID: "dev.clave.agent.internal"');
+    expect(lines).toContain("CloseApplications=yes");
+    expect(lines).toContain('Type: filesandordirs; Name: "{app}\\resources"');
+  });
+
+  it("carries the version, the publisher and the icon, takes the whole app folder, and deletes no user data on uninstall", () => {
+    for (const line of ["AppVersion=0.1.1", "VersionInfoVersion=0.1.1.0", "AppPublisher=Clave", "SetupIconFile=C:\\repo\\app\\build\\icon.ico",
+      'Source: "C:\\Temp\\clave-iscc-x\\app\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs']) expect(lines).toContain(line);
+    expect(script).not.toContain("[UninstallDelete]");
+    expect(script).not.toMatch(/\{userappdata\}|\{localappdata\}/);
+  });
+
+  it("escapes quotes and refuses a value that could start a new script line", () => {
+    expect(innoValue('say "hi"')).toBe('say ""hi""');
+    expect(() => innoValue("a\r\n[Run]")).toThrow("INNO_VALUE_CONTROL_CHARACTER");
+  });
+
+  it("makes artefacts only from a fused Windows bundle, and a release only once it is signed", () => {
+    expect(windowsArtefactDecision({flavour: "internal", report: WIN})).toEqual({ok: true});
+    expect(windowsArtefactDecision({flavour: "internal", report: {...WIN, fused: false}})).toEqual({error: "ARTEFACT_NEEDS_FUSED"});
+    expect(windowsArtefactDecision({flavour: "release", report: {...WIN, flavour: "release"}})).toEqual({error: "ARTEFACT_NEEDS_SIGNED"});
+    expect(windowsArtefactDecision({flavour: "internal", report: {...WIN, platform: undefined}})).toEqual({error: "BUNDLE_NOT_WINDOWS"});
+    expect(windowsArtefactDecision({flavour: "dev", report: WIN})).toEqual({error: "BAD_FLAVOUR"});
+  });
+
+  it("zips the app folder under its own name with Windows' tar", () => {
+    expect(winZipCommand({bundleDir: "C:\\out\\bundle", folderName: "Clave Agent Internal-win32-x64", zipPath: "C:\\out\\a.zip"}))
+      .toEqual(["tar.exe", ["-a", "-c", "-f", "C:\\out\\a.zip", "-C", "C:\\out\\bundle", "Clave Agent Internal-win32-x64"]]);
   });
 });
 
@@ -149,17 +212,30 @@ describe("a real artefacts run, when one exists", () => {
   const outDir = join(fileURLToPath(new URL("../..", import.meta.url)), "out");
   const reports = existsSync(outDir) ? readdirSync(outDir).map((f) => join(outDir, f, "artefacts", "artefacts-report.json")).filter((p) => existsSync(p)) : [];
   it.each(reports.length > 0 ? reports : [])("%s names a DMG and a ZIP that exist with the recorded hashes, and every must-pass check passed", (reportPath) => {
-    const r = JSON.parse(readFileSync(reportPath, "utf8")) as {dmg: {file: string; sha256: string}; zip: {file: string; sha256: string}; checks: Array<{name: string; status: number; mustPass: boolean}>; notarized: boolean; signatures: {app: {authorities: string[]}; helper: {authorities: string[]}; dmg: {authorities: string[]}}};
+    const dir = join(reportPath, "..");
+    const hashed = (f: {file: string; sha256: string}) => {
+      expect(existsSync(join(dir, f.file))).toBe(true);
+      expect(createHash("sha256").update(readFileSync(join(dir, f.file))).digest("hex")).toBe(f.sha256);
+    };
+    const any = JSON.parse(readFileSync(reportPath, "utf8")) as {platform?: string};
+    if (any.platform === "win32") {
+      // Windows: the installer and the ZIP instead of the DMG, and, until signing is set up, no signatures.
+      const w = any as {flavour: string; installer: {file: string; sha256: string}; zip: {file: string; sha256: string}; signed: boolean; installerAppId: string; appUserModelId: string};
+      for (const f of [w.installer, w.zip]) hashed(f);
+      expect(w.installer.file.endsWith("-x64-setup.exe")).toBe(true);
+      expect(w.zip.file.endsWith("-x64.zip")).toBe(true);
+      expect(w.signed).toBe(false);
+      expect(w.installerAppId).toBe(INSTALLER_APP_IDS[w.flavour]);
+      expect(w.appUserModelId).toBe(w.flavour === "internal" ? "dev.clave.agent.internal" : "dev.clave.agent");
+      return;
+    }
+    const r = any as {dmg: {file: string; sha256: string}; zip: {file: string; sha256: string}; checks: Array<{name: string; status: number; mustPass: boolean}>; notarized: boolean; signatures: {app: {authorities: string[]}; helper: {authorities: string[]}; dmg: {authorities: string[]}}};
     expect(r.signatures.app.authorities.length).toBeGreaterThan(0);
     expect(r.signatures.helper.authorities).toEqual(r.signatures.app.authorities);
     expect(r.signatures.dmg.authorities).toEqual(r.signatures.app.authorities);
     // The signature chains carry names only (the report's own sha256 fields are elsewhere).
     expect(JSON.stringify(r.signatures)).not.toMatch(/[0-9a-f]{40}/);
-    const dir = join(reportPath, "..");
-    for (const f of [r.dmg, r.zip]) {
-      expect(existsSync(join(dir, f.file))).toBe(true);
-      expect(createHash("sha256").update(readFileSync(join(dir, f.file))).digest("hex")).toBe(f.sha256);
-    }
+    for (const f of [r.dmg, r.zip]) hashed(f);
     expect(r.dmg.file.endsWith("-arm64.dmg")).toBe(true);
     expect(r.checks.filter((c) => c.mustPass).every((c) => c.status === 0)).toBe(true);
     if (!r.notarized) expect(r.checks.find((c) => c.name === "stapler-validate-app")?.mustPass).toBe(false);

@@ -27,11 +27,42 @@ describe("before capture", () => {
 
   it("without selfApp, or with a malformed one, only the built-in release name is denied", () => {
     expect(createExclusions({exclusions: [], excludedSites: []}).before({app: "Clave Agent Internal", title: "Review"})).toBeNull();
-    for (const selfApp of ["", "   ", 7, null, ["Clave Agent Internal"]]) {
+    for (const selfApp of ["", "   ", 7, null, [7, "", null], {name: "Clave Agent Internal"}]) {
       const x = createExclusions({exclusions: [], excludedSites: [], selfApp});
       expect(x.before({app: "Clave Agent Internal", title: "Review"}), String(selfApp)).toBeNull();
       expect(x.before({app: "Clave Agent", title: "Review"})).toBe("excludedApp");
     }
+  });
+
+  it("reads a browser only where its band was measured: by name AND by the bundle id the reader gives", () => {
+    const x = createExclusions({exclusions: [], excludedSites: []});
+    // Measured: Chrome and Safari on macOS, Edge and Chrome on Windows.
+    expect(x.before({app: "Google Chrome", bundleId: "com.google.Chrome", title: "Docs"})).toBeNull();
+    expect(x.before({app: "Safari", bundleId: "com.apple.Safari", title: "Docs"})).toBeNull();
+    expect(x.before({app: "Microsoft Edge", bundleId: "msedge.exe", title: "Docs"})).toBeNull();
+    expect(x.before({app: "Google Chrome", bundleId: "chrome.exe", title: "Docs"})).toBeNull();
+    // The same names elsewhere are not measured, and are refused before anything is captured.
+    expect(x.before({app: "Microsoft Edge", bundleId: "com.microsoft.edgemac", title: "Docs"})).toBe("excludedApp");
+    // Unmeasured browsers stay refused.
+    expect(x.before({app: "Brave Browser", bundleId: "brave.exe", title: "Docs"})).toBe("excludedApp");
+    // Windows Chrome with its strip is read, and its incognito window is not.
+    const chrome = {app: "Google Chrome", bundleId: "chrome.exe", title: "CLAVE-BAND probe"};
+    expect(x.after(chrome, "127.0.0.1:8765/probe.html")).toBeNull();
+    expect(x.after(chrome, "127.0.0.1:8765/probe.html\nIncognito")).toBe("privateWindow");
+    // A Chrome the reader could not show to be English is refused before anything is captured, and
+    // so is any window the reader flags the same way, whatever it is called.
+    expect(x.before({...chrome, bandWithheld: true})).toBe("excludedApp");
+    expect(x.before({app: "Notes", bundleId: "notes.exe", title: "Docs", bandWithheld: true})).toBe("excludedApp");
+    // A read that still arrives without its strip is never kept either.
+    expect(x.after(chrome, undefined)).toBe("unknownWindow");
+  });
+
+  it("denies every name in a selfApp list, such as an unpackaged run's \"Electron\", and only those", () => {
+    const x = createExclusions({exclusions: [], excludedSites: [], selfApp: ["Clave Agent Dev", "Electron", 7]});
+    expect(x.before({app: "Clave Agent Dev", title: "Review"})).toBe("excludedApp");
+    expect(x.before({app: "Electron", title: "Clave Agent Dev"})).toBe("excludedApp");
+    expect(x.before({app: "Clave Agent", title: "Review"})).toBe("excludedApp");
+    expect(x.before({app: "Electron Fiddle", title: "Sketch"})).toBeNull();
   });
 
   it("excludes personal messengers and password managers by default", () => {
@@ -39,6 +70,26 @@ describe("before capture", () => {
     for (const app of ["Telegram", "WhatsApp", "Messages", "Signal", "1Password", "Bitwarden", "Keychain Access"]) {
       expect(x.before({app, title: "Main"})).toBe("excludedApp");
     }
+  });
+
+  // The names are what the Windows reader reports: each program's own description, measured on Windows 11.
+  it("denies Windows' own surfaces and prompts, which the user cannot re-enable", () => {
+    const x = createExclusions({exclusions: [], excludedSites: []});
+    for (const app of [
+      "LockApp", "Windows Logon User Interface Host", "Windows Start Experience Host", "SearchHost",
+      "Windows Shell Experience Host", "ShellHost", "TextInputHost",
+      "Consent UI for administrative applications", "Credential Manager UI Host"
+    ]) {
+      expect(x.before({app, title: "Main"}), app).toBe("excludedApp");
+    }
+    // File Explorer, Settings and Task Manager are ordinary work windows, as Finder is on macOS.
+    for (const app of ["Windows Explorer", "Settings", "Task Manager"]) expect(x.before({app, title: "Main"}), app).toBeNull();
+  });
+
+  it("excludes the Windows messengers and password stores by default", () => {
+    const x = defaults();
+    for (const app of ["Telegram Desktop", "KeePass", "Phone Link"]) expect(x.before({app, title: "Main"}), app).toBe("excludedApp");
+    expect(x.before({app: "Windows Explorer", title: "Credential Manager"})).toBe("excludedTitle");
   });
 
   it("reads work chat by default", () => {

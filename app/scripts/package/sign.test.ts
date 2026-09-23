@@ -12,7 +12,7 @@ import * as sign from "./sign.mjs";
 type Enum = Record<string, number | string>;
 const {FUSE_TABLE, fuseConfig, checkFuseWire, ENTITLEMENT_LEVELS, FORBIDDEN_ENTITLEMENTS, entitlementsFor} = harden as {
   FUSE_TABLE: Record<string, boolean>;
-  fuseConfig: (options: Enum, version: {V1: string}) => Record<string, unknown>;
+  fuseConfig: (options: Enum, version: {V1: string}, platform?: string) => Record<string, unknown>;
   checkFuseWire: (wire: Record<number, number>, options: Enum, state: {ENABLE: number; DISABLE: number}) => Array<{code: string; detail: string}>;
   ENTITLEMENT_LEVELS: string[][];
   FORBIDDEN_ENTITLEMENTS: string[];
@@ -40,6 +40,10 @@ describe("the fuse table and its config", () => {
       EnableEmbeddedAsarIntegrityValidation: true, OnlyLoadAppFromAsar: true, LoadBrowserProcessSpecificV8Snapshot: false, GrantFileProtocolExtraPrivileges: true, WasmTrapHandlers: true
     });
     expect(fuseConfig(OPTIONS, VERSION)).toEqual({version: "1", strictlyRequireAllFuses: true, resetAdHocDarwinSignature: true, 0: false, 1: true, 2: false, 3: false, 4: true, 5: true, 6: false, 7: true, 8: true});
+  });
+
+  it("sets the same fuses on Windows, with no macOS signature to redo there", () => {
+    expect(fuseConfig(OPTIONS, VERSION, "win32")).toEqual({version: "1", strictlyRequireAllFuses: true, resetAdHocDarwinSignature: false, 0: false, 1: true, 2: false, 3: false, 4: true, 5: true, 6: false, 7: true, 8: true});
   });
 
   it("refuses a fuse the tool knows and the table does not, and a table entry the tool does not know", () => {
@@ -207,11 +211,12 @@ describe("a real bundle's hardening, when one exists", () => {
   const outDir = join(fileURLToPath(new URL("../..", import.meta.url)), "out");
   const reports = existsSync(outDir) ? readdirSync(outDir).map((f) => join(outDir, f, "bundle", "bundle-report.json")).filter((p) => existsSync(p)) : [];
   it.each(reports.length > 0 ? reports : [])("%s: the fuse wire on disk matches the table once fused, and a signature verifies once signed", async (reportPath) => {
-    const report = JSON.parse(readFileSync(reportPath, "utf8")) as {fused: boolean; signed: boolean; appPath: string; appName: string; entitlementLevel?: number};
+    const report = JSON.parse(readFileSync(reportPath, "utf8")) as {fused: boolean; signed: boolean; appPath: string; appName: string; entitlementLevel?: number; platform?: string; executable?: string};
     const appPath = join(outDir, report.appPath);
     if (report.fused) {
       const fuses = await import("@electron/fuses") as unknown as {getCurrentFuseWire: (p: string) => Promise<Record<number, number>>; FuseV1Options: Enum; FuseState: {ENABLE: number; DISABLE: number}};
-      const wire = await fuses.getCurrentFuseWire(appPath);
+      // The wire lives in the .app on macOS and in the app's own .exe on Windows.
+      const wire = await fuses.getCurrentFuseWire(report.platform === "win32" ? join(appPath, report.executable ?? `${report.appName}.exe`) : appPath);
       expect(checkFuseWire(wire, fuses.FuseV1Options, fuses.FuseState)).toEqual([]);
     }
     if (report.signed) {

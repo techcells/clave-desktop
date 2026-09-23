@@ -8,7 +8,7 @@ import {createRealReader} from "./realReader";
 // The helper as `pnpm --dir app build:native` leaves it. Where it has not been built (any machine
 // without the Rust toolchain) this file skips instead of failing: the TypeScript suite must stay
 // runnable everywhere.
-const BINARY = fileURLToPath(new URL("../../native/reader/target/release/clave-reader", import.meta.url));
+const BINARY = fileURLToPath(new URL(`../../native/reader/target/release/clave-reader${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 
 describe.skipIf(!existsSync(BINARY))("the real clave-reader binary under the real client", () => {
   it("says ready, answers a permission question with a known value, and leaves by itself when asked", async () => {

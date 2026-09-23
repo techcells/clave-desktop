@@ -333,6 +333,11 @@ fn window_value(window: Option<&WindowInfo>) -> Value {
                 object.insert("bundleId".to_owned(), json!(bundle_id));
             }
             object.insert("title".to_owned(), json!(window.title));
+            // Only ever `true`, and omitted otherwise, so every window that is not withheld reads on
+            // the wire exactly as it did before the key existed.
+            if window.band_withheld {
+                object.insert("bandWithheld".to_owned(), json!(true));
+            }
             Value::Object(object)
         }
     }
@@ -348,6 +353,7 @@ mod tests {
             app: "Google Chrome".to_owned(),
             bundle_id: bundle.map(str::to_owned),
             title: "Staged chat".to_owned(),
+            band_withheld: false,
         }
     }
 
@@ -612,6 +618,16 @@ mod tests {
             front_window_line(3, Some(&window(None))),
             r#"{"id":3,"window":{"app":"Google Chrome","title":"Staged chat"}}"#
         );
+    }
+
+    #[test]
+    fn a_window_whose_band_is_withheld_says_so_and_no_other_window_mentions_it() {
+        let withheld = WindowInfo { band_withheld: true, ..window(Some("chrome.exe")) };
+        assert_eq!(
+            front_window_line(3, Some(&withheld)),
+            r#"{"id":3,"window":{"app":"Google Chrome","bandWithheld":true,"bundleId":"chrome.exe","title":"Staged chat"}}"#
+        );
+        assert!(!front_window_line(3, Some(&window(Some("chrome.exe")))).contains("bandWithheld"));
     }
 
     #[test]

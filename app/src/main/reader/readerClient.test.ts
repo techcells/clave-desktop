@@ -228,6 +228,17 @@ describe("reader client: calls", () => {
       expect(await p).toBe("unknown");
     });
 
+    it("passes a front window's bandWithheld on to the app, and never back to the helper in an expect", async () => {
+      await ready();
+      const flagged = {app: "Google Chrome", bundleId: "chrome.exe", title: "Docs", bandWithheld: true as const};
+      const front = client.frontWindow();
+      helpers.latest().answerLast({window: flagged});
+      expect(await front).toEqual(flagged);
+      void client.read({budgetMs: 1500, expect: flagged});
+      expect(helpers.latest().received.at(-1)).toMatchObject({op: "read", expect: {app: "Google Chrome", bundleId: "chrome.exe", title: "Docs"}});
+      expect((helpers.latest().received.at(-1) as {expect: object}).expect).not.toHaveProperty("bandWithheld");
+    });
+
     it("treats a nonsense budget as zero rather than passing it on", async () => {
       await ready();
       void client.read({budgetMs: Number.NaN, expect: WINDOW});

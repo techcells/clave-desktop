@@ -1,8 +1,9 @@
 import {readdirSync, readFileSync, statSync} from "node:fs";
 import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 
-const ROOT = new URL(".", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL(".", import.meta.url));
 function productionFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);

@@ -4,7 +4,7 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import type {EngineStatus, NothingReadWhy, UserSettings} from "../../shared/ipc";
 import {NOTHING_READ_WHY} from "../../shared/ipc";
-import {APP_FILE, BLOCKERS, CLAIMS, COPY, KNOWN_LIMITS, NOTHING_READ, PERMISSION_STEPS} from "../copy";
+import {APP_FILE, BLOCKERS, blockerCopy, checkingPermissionLine, CLAIMS, COPY, KNOWN_LIMITS, knownLimits, NOTHING_READ, PERMISSION_STEPS, privateWindowsLine, WINDOWS_COPY} from "../copy";
 import {downloadView, firstBlocker, gigabytes, isTranslocated, LONG_WAIT_MS, mustSignIn, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
 
 const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus => ({capture: "off", resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false, account: null});
@@ -145,6 +145,40 @@ describe("the permission step's copy", () => {
     const probe = COPY.onboarding.permission.steps("Probe Name.app");
     expect(probe[1]).toContain("Probe Name.app");
     expect(probe[1]).not.toContain(APP_FILE);
+  });
+});
+
+describe("the words for Windows", () => {
+  const windowsLines = [
+    blockerCopy("NO_PERMISSION", "windows").sentence, blockerCopy("NO_PERMISSION", "windows").action,
+    checkingPermissionLine("windows"), privateWindowsLine("windows"), ...knownLimits("windows"),
+    WINDOWS_COPY.permission.title, WINDOWS_COPY.permission.lead, WINDOWS_COPY.checkingOnboarding
+  ];
+
+  it("says nothing a Windows user cannot find: no System Settings, Screen Recording, menu bar or Safari", () => {
+    for (const line of windowsLines) expect(line).not.toMatch(/System Settings|Screen Recording|menu bar|macOS|Applications|Safari/);
+  });
+
+  it("names the browsers that are measured there, Chrome only in English, and keeps every other limit as it is", () => {
+    expect(privateWindowsLine("windows")).toContain("Microsoft Edge");
+    expect(privateWindowsLine("windows")).toContain("InPrivate");
+    expect(privateWindowsLine("windows")).toContain("Google Chrome");
+    expect(privateWindowsLine("windows")).toContain("Incognito");
+    expect(privateWindowsLine("windows")).toContain("English");
+    expect(WINDOWS_COPY.addressLimit).toContain("Google Chrome");
+    expect(knownLimits("windows")).toHaveLength(KNOWN_LIMITS.length);
+    expect(knownLimits("windows").filter((line) => !KNOWN_LIMITS.includes(line))).toEqual([WINDOWS_COPY.addressLimit]);
+  });
+
+  it("leaves macOS, and a window told no platform, with the macOS words exactly", () => {
+    for (const platform of ["mac", undefined] as const) {
+      expect(blockerCopy("NO_PERMISSION", platform)).toBe(BLOCKERS.NO_PERMISSION);
+      expect(checkingPermissionLine(platform)).toBe(COPY.home.checkingPermission);
+      expect(privateWindowsLine(platform)).toBe(COPY.onboarding.privateWindows);
+      expect(knownLimits(platform)).toBe(KNOWN_LIMITS);
+    }
+    // Only NO_PERMISSION has Windows words; every other blocker reads the same everywhere.
+    expect(blockerCopy("MODEL_MISSING", "windows")).toBe(BLOCKERS.MODEL_MISSING);
   });
 });
 
@@ -420,12 +454,14 @@ describe("what the renderer may import", () => {
     return statSync(path).isDirectory() ? files(path, pattern) : pattern.test(name) && !GUARD.has(path) ? [path] : [];
   });
   const walked = roots.flatMap((root) => files(root, /\.(ts|tsx)$/));
+  /** The walk yields native paths; the expectations below are written with `/`, which Windows does not use. */
+  const endsWith = (file: string, tail: string) => file.replaceAll("\\", "/").endsWith(tail);
 
   it("walks the renderer and the shared surface, tests included, and finds them there", () => {
-    expect(walked.some((f) => f.endsWith("/renderer/main.tsx"))).toBe(true);
-    expect(walked.some((f) => f.endsWith("/renderer/copy.ts"))).toBe(true);
-    expect(walked.some((f) => f.endsWith("/shared/ipc.ts"))).toBe(true);
-    expect(walked.some((f) => f.endsWith("/shared/ipc.test.ts"))).toBe(true);
+    expect(walked.some((f) => endsWith(f, "/renderer/main.tsx"))).toBe(true);
+    expect(walked.some((f) => endsWith(f, "/renderer/copy.ts"))).toBe(true);
+    expect(walked.some((f) => endsWith(f, "/shared/ipc.ts"))).toBe(true);
+    expect(walked.some((f) => endsWith(f, "/shared/ipc.test.ts"))).toBe(true);
     expect(walked.some((f) => GUARD.has(f))).toBe(false);
   });
 
@@ -444,8 +480,8 @@ describe("what the renderer may import", () => {
   const assets = files(fileURLToPath(new URL("../", import.meta.url)), /\.(css|html)$/);
 
   it("walks the renderer's stylesheet and page too", () => {
-    expect(assets.some((f) => f.endsWith("/renderer/styles.css"))).toBe(true);
-    expect(assets.some((f) => f.endsWith("/renderer/index.html"))).toBe(true);
+    expect(assets.some((f) => endsWith(f, "/renderer/styles.css"))).toBe(true);
+    expect(assets.some((f) => endsWith(f, "/renderer/index.html"))).toBe(true);
   });
 
   it.each(assets)("%s fetches nothing from anywhere", (file) => {
