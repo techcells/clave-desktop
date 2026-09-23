@@ -3,9 +3,11 @@
 import {spawnSync} from "node:child_process";
 import {chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {posix} from "node:path";
 import {afterAll, describe, expect, it} from "vitest";
 import * as packagesScript from "./packages.mjs";
+
+const {join} = posix;
 
 type Contents = Array<{src?: string; dst: string; type?: string; packager?: string; file_info?: {mode: number}}>;
 type Config = Record<string, unknown> & {contents: Contents; overrides: {deb: {depends: string[]; scripts: Record<string, string>}; rpm: {depends: string[]; scripts?: unknown}}};
@@ -114,7 +116,8 @@ describe("the maintainer scripts (the .deb only)", () => {
 // The scripts themselves, run with a POSIX shell (dash where there is one, as Ubuntu runs them) against a
 // stub apparmor_parser that logs its arguments and succeeds or fails as told, and stand-in files for
 // AppArmor's securityfs folder and the userns restriction switch.
-describe("the maintainer scripts, run", () => {
+// The scripts run under a POSIX shell, as dpkg runs them: not on Windows.
+describe.skipIf(process.platform === "win32")("the maintainer scripts, run", () => {
   const shell = existsSync("/bin/dash") ? "/bin/dash" : "/bin/sh";
   const root = mkdtempSync(join(tmpdir(), "clave-maint-"));
   afterAll(() => rmSync(root, {recursive: true, force: true}));

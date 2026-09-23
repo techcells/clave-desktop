@@ -1,11 +1,13 @@
 import {lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {posix} from "node:path";
 import {describe, expect, it} from "vitest";
 import {
   EXTENSION_UUID, createGnomeExtension, extensionBlockers, extensionDataHome, extensionFs, extensionState, gvariantStrings, gvariantStringArray, gdbusString,
   shellExtensionState, type ExtensionFacts
 } from "./gnomeExtension";
+
+const {join} = posix;
 
 const READER = "/opt/Clave Agent/clave-reader";
 
@@ -360,7 +362,8 @@ describe("reading GNOME's answers, more strictly", () => {
   });
 });
 
-describe("the real file writes (Task 7 review, M9)", () => {
+// POSIX file modes and symlinks on a real disk: meaningless on Windows, where the extension never runs.
+describe.skipIf(process.platform === "win32")("the real file writes (Task 7 review, M9)", () => {
   const scratch = () => mkdtempSync(join(tmpdir(), "clave-ext-"));
 
   it("replaces a symlink where a file goes, never writing through it, with exactly the mode asked for", async () => {

@@ -221,8 +221,9 @@ export function linuxPackagerOptions({flavour, info, stagingDir, outDir, electro
   if (typeof electronVersion !== "string" || !/^[0-9]+[.][0-9]+[.][0-9]+$/.test(electronVersion)) return {error: "ELECTRON_VERSION_UNKNOWN"};
   const copyright = copyrightFor(entity, info.buildNumber);
   if (copyright === null) return {error: "COPYRIGHT_ENTITY_MISSING"};
+  // Linux paths (this only ever runs on Linux; posix keeps the tests the same on every machine).
   const options = {
-    dir: join(stagingDir, "app"),
+    dir: posix.join(stagingDir, "app"),
     out: outDir,
     name: info.appName,
     executableName: linuxExecutableName(flavour),
@@ -237,7 +238,7 @@ export function linuxPackagerOptions({flavour, info, stagingDir, outDir, electro
     junk: true,
     quiet: true,
     asar: ASAR_UNPACK,
-    extraResource: [join(stagingDir, "electron", "LICENSE"), join(stagingDir, "electron", "LICENSES.chromium.html")],
+    extraResource: [posix.join(stagingDir, "electron", "LICENSE"), posix.join(stagingDir, "electron", "LICENSES.chromium.html")],
     appCopyright: copyright
   };
   if (electronZipDir) options.electronZipDir = electronZipDir;
@@ -403,7 +404,7 @@ export function checkBundle({listing, plist, asarFiles, unpacked, options}) {
  */
 export function cacheFor(platform, env, home = homedir()) {
   if (platform === "win32") return join(env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "electron", "Cache");
-  if (platform === "linux") return join(env.XDG_CACHE_HOME || join(home, ".cache"), "electron");
+  if (platform === "linux") return posix.join(env.XDG_CACHE_HOME || posix.join(home, ".cache"), "electron");
   return join(home, "Library", "Caches", "electron");
 }
 

@@ -1,4 +1,4 @@
-import {dirname, join} from "node:path";
+import {posix} from "node:path";
 import type {AppInfo} from "../shared/ipc";
 
 /**
@@ -21,5 +21,6 @@ export function platformName(nodePlatform: string): NonNullable<AppInfo["platfor
  */
 export function readerSpawnEnv(nodePlatform: string, base: NodeJS.ProcessEnv, helperPath: string): NodeJS.ProcessEnv {
   if (nodePlatform !== "linux") return base;
-  return {...base, OMP_THREAD_LIMIT: "1", CLAVE_TESSDATA: base.CLAVE_TESSDATA || join(dirname(helperPath), "tessdata")};
+  // A Linux path, built as one whatever machine runs this (the tests run on macOS and Windows too).
+  return {...base, OMP_THREAD_LIMIT: "1", CLAVE_TESSDATA: base.CLAVE_TESSDATA || posix.join(posix.dirname(helperPath), "tessdata")};
 }

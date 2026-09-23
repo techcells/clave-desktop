@@ -405,7 +405,7 @@ export function defaultTools(platform, home, env) {
     };
   }
   // Linux: pnpm's standalone install folder (`~/.local/share/pnpm`) and rustup's default cargo.
-  if (platform === "linux") return {pnpm: join(home, ".local", "share", "pnpm", "pnpm"), cargo: join(home, ".cargo", "bin", "cargo")};
+  if (platform === "linux") return {pnpm: posix.join(home, ".local", "share", "pnpm", "pnpm"), cargo: posix.join(home, ".cargo", "bin", "cargo")};
   return {pnpm: join(home, "Library", "pnpm", "bin", "pnpm"), cargo: "/opt/homebrew/opt/rustup/bin/cargo"};
 }
 

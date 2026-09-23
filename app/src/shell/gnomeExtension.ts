@@ -1,9 +1,12 @@
 import {execFile} from "node:child_process";
 import {randomBytes} from "node:crypto";
 import {chmod, lstat, mkdir, readFile, realpath, rename, rm, rmdir, writeFile} from "node:fs/promises";
-import {isAbsolute, join} from "node:path";
+import {posix} from "node:path";
 import type {Blocker} from "../main/engine";
 import type {ExtensionState} from "../shared/ipc";
+
+// Linux paths whatever the machine running the code: the tests run on macOS and Windows too.
+const {isAbsolute, join} = posix;
 
 /**
  * The Clave focus extension (Linux, GNOME): the app installs it, checks it and removes it here. On

@@ -290,7 +290,8 @@ describe("Linux: an app folder per architecture, installed to /opt by the packag
   it("looks for the zip where @electron/get keeps it on Linux: XDG_CACHE_HOME, else ~/.cache", () => {
     expect(cacheFor("linux", {}, "/home/u")).toBe("/home/u/.cache/electron");
     expect(cacheFor("linux", {XDG_CACHE_HOME: "/x/cache"}, "/home/u")).toBe("/x/cache/electron");
-    expect(cacheFor("darwin", {XDG_CACHE_HOME: "/x/cache"}, "/Users/u")).toBe("/Users/u/Library/Caches/electron");
+    // The macOS branch builds a path of the machine it runs on.
+    expect(cacheFor("darwin", {XDG_CACHE_HOME: "/x/cache"}, "/Users/u")).toBe(join("/Users/u", "Library", "Caches", "electron"));
     expect(cacheFor("linux", {XDG_CACHE_HOME: ""}, "/home/u")).toBe("/home/u/.cache/electron");
   });
 
