@@ -16,6 +16,7 @@ import {dirname, join, posix} from "node:path";
 import {fileURLToPath} from "node:url";
 import {runningAppCheck} from "../dev-bundle.mjs";
 import {ENTITLEMENT_LEVELS, entitlementsFor, flip, FORBIDDEN_ENTITLEMENTS} from "./harden.mjs";
+import {runningProbe} from "./bundle.mjs";
 import {requestedFlavour, resolveOut} from "./stage.mjs";
 
 /** `security find-identity -p codesigning` lines: `N) <hash> "Name"`, with a trailing `(CSSMERR_...)` when not trusted. */
@@ -135,27 +136,37 @@ export async function signBundle({appDir, argv, env, home, log, err}) {
   if (report.flavour !== flavour) return fail("BUNDLE_FLAVOUR_MISMATCH", report.flavour);
   const appPath = join(out.dir, report.appPath);
   const appName = report.appName;
-  const executable = join(appPath, "Contents", "MacOS", appName);
-  const helper = join(appPath, "Contents", "MacOS", "clave-reader");
+  // A report from before Windows names no platform: it describes a macOS bundle.
+  const windows = report.platform === "win32";
+  const executable = windows ? join(appPath, report.executable ?? `${appName}.exe`) : join(appPath, "Contents", "MacOS", appName);
+  const helper = windows ? join(appPath, report.helper ?? "clave-reader.exe") : join(appPath, "Contents", "MacOS", "clave-reader");
   if (!existsSync(executable) || !existsSync(helper)) return fail("BUNDLE_INCOMPLETE");
 
   let probe = {defaultLocation: true, status: 1, output: ""};
-  try { probe = {...probe, status: 0, output: execFileSync("/usr/bin/pgrep", ["-f", join(appPath, "Contents", "MacOS")], {stdio: ["ignore", "pipe", "pipe"]}).toString()}; }
-  catch (error) { probe = {...probe, status: Number.isInteger(error?.status) ? error.status : null, output: String(error?.stdout ?? "")}; }
+  if (windows) probe = runningProbe(appPath, "win32");
+  else {
+    try { probe = {...probe, status: 0, output: execFileSync("/usr/bin/pgrep", ["-f", join(appPath, "Contents", "MacOS")], {stdio: ["ignore", "pipe", "pipe"]}).toString()}; }
+    catch (error) { probe = {...probe, status: Number.isInteger(error?.status) ? error.status : null, output: String(error?.stdout ?? "")}; }
+  }
   const running = runningAppCheck(probe);
   if (running === "running") return fail("APP_RUNNING", appPath);
   if (running === "unanswered") return fail("PGREP_UNANSWERED");
 
-  // Identity first, so a wrong name refuses before anything is modified.
+  // Identity first, so a wrong name refuses before anything is modified. Windows signing is not set
+  // up yet (owner decision, 2026-09-23: unsigned for now): an internal build is fused and left
+  // unsigned, and a release build refuses exactly as an unsigned macOS release does.
+  if (windows && args.sign !== null) return fail("WINDOWS_SIGNING_NOT_SET_UP");
   let identities = [];
-  try { identities = parseIdentities(execFileSync("/usr/bin/security", ["find-identity", "-p", "codesigning"], {stdio: ["ignore", "pipe", "pipe"]}).toString()); }
-  catch { return fail("IDENTITY_LOOKUP_FAILED"); }
+  if (!windows) {
+    try { identities = parseIdentities(execFileSync("/usr/bin/security", ["find-identity", "-p", "codesigning"], {stdio: ["ignore", "pipe", "pipe"]}).toString()); }
+    catch { return fail("IDENTITY_LOOKUP_FAILED"); }
+  }
   const decision = identityDecision({flavour, requested: args.sign, identities});
   if (decision.error) return fail(decision.error);
   // The ladder above level 0 needs a Team ID (see entitlementsFor); a self-signed run refuses it.
   if (!decision.skip && !decision.developerId && args.level !== 0) return fail("LEVEL_NEEDS_DEVELOPER_ID", String(args.level));
 
-  const flipped = await flip(appPath);
+  const flipped = windows ? await flip(executable, "win32") : await flip(appPath);
   if (flipped.error) return fail(flipped.error, flipped.detail);
   report.fused = true;
   report.fuses = flipped.wire;

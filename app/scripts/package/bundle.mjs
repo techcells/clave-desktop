@@ -328,7 +328,7 @@ export async function versionInfoOf(exePath) {
  * on Windows the process list is asked through PowerShell, with the folder passed in the environment
  * rather than on the command line, so no quoting of a path with spaces can go wrong.
  */
-function runningProbe(dir, platform) {
+export function runningProbe(dir, platform) {
   const probe = {defaultLocation: true, status: 1, output: ""};
   if (platform === "win32") {
     const script = "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:CLAVE_PROBE_DIR, [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $_.ProcessId }";

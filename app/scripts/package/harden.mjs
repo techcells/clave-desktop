@@ -26,10 +26,14 @@ export const FUSE_TABLE = {
   WasmTrapHandlers: true
 };
 
-/** The config object `flipFuses` takes, built from the tool's own enums so an index can never be guessed. */
-export function fuseConfig(FuseV1Options, FuseVersion) {
+/**
+ * The config object `flipFuses` takes, built from the tool's own enums so an index can never be guessed.
+ * The fuse table is the same on every system; only macOS has an ad-hoc signature to redo after the
+ * binary changes, so `resetAdHocDarwinSignature` is set there alone.
+ */
+export function fuseConfig(FuseV1Options, FuseVersion, platform = "darwin") {
   const known = Object.entries(FuseV1Options).filter(([, v]) => typeof v === "number");
-  const config = {version: FuseVersion.V1, strictlyRequireAllFuses: true, resetAdHocDarwinSignature: true};
+  const config = {version: FuseVersion.V1, strictlyRequireAllFuses: true, resetAdHocDarwinSignature: platform === "darwin"};
   for (const [name, index] of known) {
     if (!Object.hasOwn(FUSE_TABLE, name)) throw new Error(`FUSE_UNLISTED ${name}`);
     config[index] = FUSE_TABLE[name];
@@ -110,11 +114,14 @@ export function entitlementsFor(filePath, level, appName, {teamId = true} = {}) 
 // ---------------------------------------------------------------------------------------------
 // The impure half. Nothing below runs at import.
 
-/** Flips the fuses on a bundle and reads them back. Returns `{wire}` or `{error, detail}`. */
-export async function flip(appPath) {
+/**
+ * Flips the fuses on a bundle and reads them back. Returns `{wire}` or `{error, detail}`. `appPath` is
+ * the .app on macOS and the app's own .exe on Windows, which is where Electron keeps its fuse wire.
+ */
+export async function flip(appPath, platform = "darwin") {
   const fuses = await import("@electron/fuses");
   let config;
-  try { config = fuseConfig(fuses.FuseV1Options, fuses.FuseVersion); } catch (error) { return {error: error instanceof Error ? error.message.split(" ")[0] : "FUSE_TABLE_INVALID", detail: error instanceof Error ? error.message : ""}; }
+  try { config = fuseConfig(fuses.FuseV1Options, fuses.FuseVersion, platform); } catch (error) { return {error: error instanceof Error ? error.message.split(" ")[0] : "FUSE_TABLE_INVALID", detail: error instanceof Error ? error.message : ""}; }
   try { await fuses.flipFuses(appPath, config); } catch (error) { return {error: "FUSE_FLIP_FAILED", detail: error instanceof Error ? error.message.split("\n")[0].slice(0, 160) : ""}; }
   const wire = await fuses.getCurrentFuseWire(appPath);
   const problems = checkFuseWire(wire, fuses.FuseV1Options, fuses.FuseState);
