@@ -72,12 +72,19 @@ describe("recognitionEntries: the recognition models shipped with the Linux app"
     expect(recognitionEntries("not a list", "linux")).toEqual({error: "RECOGNITION_ENTRY_INVALID", detail: "list"});
   });
 
-  it("the hand-kept file lists both models the Linux package ships, each under Apache-2.0", async () => {
+  it("the hand-kept file lists every model the Linux package ships, under Apache-2.0, with the source, commit and hash staging uses", async () => {
     const real = JSON.parse(readFileSync(fileURLToPath(new URL("./licences.fixed.json", import.meta.url)), "utf8")) as {recognitionModels: unknown};
-    const {TESSDATA_MODELS} = await import("./stage.mjs") as {TESSDATA_MODELS: Array<{file: string}>};
+    const {TESSDATA_MODELS, TESSDATA_SOURCE} = await import("./stage.mjs") as {TESSDATA_MODELS: Array<{file: string; sha256: string}>; TESSDATA_SOURCE: {repository: string; commit: string}};
     const listed = recognitionEntries(real.recognitionModels, "linux").entries ?? [];
     expect(listed.flatMap((e) => e.files).sort()).toEqual(TESSDATA_MODELS.map((m) => m.file).sort());
-    for (const e of listed) expect(chosenLicence(e.licence), e.name).toBe("Apache-2.0");
+    const repo = TESSDATA_SOURCE.repository.split("/")[1];
+    for (const e of listed) {
+      expect(chosenLicence(e.licence), e.name).toBe("Apache-2.0");
+      expect(e.source, e.name).toBe(`https://github.com/${TESSDATA_SOURCE.repository}`);
+      expect(e.name, e.name).toContain(`(${repo})`);
+      expect(e.version, e.name).toContain(`commit ${TESSDATA_SOURCE.commit.slice(0, 8)}`);
+      for (const file of e.files) expect(e.version, file).toContain(TESSDATA_MODELS.find((m) => m.file === file)?.sha256 ?? "unpinned");
+    }
   });
 
   it("is rendered in its own block when there is one, and not at all otherwise", () => {
@@ -344,8 +351,8 @@ describe("a real staged licence file, when one exists", () => {
     const manifestPath = join(path, "..", "..", "..", "manifest.json");
     const platform = (existsSync(manifestPath) ? (JSON.parse(readFileSync(manifestPath, "utf8")) as {platform?: string}).platform : undefined) ?? "darwin";
     const crates = platform === "win32" ? ["\nwindows 0.62", "\nwindows-core 0.62"] : platform === "linux" ? ["\nzbus 5.", "\npipewire 0.", "\nsha2 0."] : ["objc2-vision", "objc2-screen-capture-kit"];
-    // Linux ships the two recognition models, listed in their own block; no other system mentions them.
-    if (platform === "linux") for (const needle of ["Text recognition models (bundled, Linux)", "Tesseract recognition model eng (tessdata_best)", "Tesseract recognition model por (tessdata_best)"]) expect(text, needle).toContain(needle);
+    // Linux ships its recognition model, listed in its own block; no other system mentions it.
+    if (platform === "linux") for (const needle of ["Text recognition models (bundled, Linux)", "Tesseract recognition model por (tessdata_fast)", "https://github.com/tesseract-ocr/tessdata_fast"]) expect(text, needle).toContain(needle);
     else expect(text).not.toContain("Text recognition models");
     for (const crate of crates) expect(text, crate).toContain(crate);
     // Compile-time-only crates run inside the compiler and are not in the binary (`linkedCrates`).

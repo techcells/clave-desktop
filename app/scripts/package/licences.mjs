@@ -219,7 +219,7 @@ export function runtimeEntry(fixed, runtime) {
 
 /**
  * The recognition models a system's package ships (`licences.fixed.json` `recognitionModels`, each
- * naming its `platforms`): today Tesseract's two `tessdata_best` models, Linux only. An entry missing
+ * naming its `platforms`): today Tesseract's `tessdata_fast` Portuguese model, Linux only. An entry missing
  * any of its facts is a refusal, so a model can never ship without its line in the licence file.
  */
 export function recognitionEntries(fixed, platform) {

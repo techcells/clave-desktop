@@ -416,7 +416,7 @@ jobs:
       - name: Fetch the recognition models
         run: |
           set -euo pipefail
-          # From the tessdata_best commit scripts/package/stage.mjs pins (TESSDATA_SOURCE); staging checks
+          # From the tessdata_fast commit scripts/package/stage.mjs pins (TESSDATA_SOURCE); staging checks
           # each file against the SHA-256 the reader pins and refuses anything else.
           dir="$RUNNER_TEMP/tessdata"; mkdir -p "$dir"
           node --input-type=module -e 'import {TESSDATA_SOURCE} from "./app/scripts/package/stage.mjs"; console.log(TESSDATA_SOURCE.urls.join("\n"))' \

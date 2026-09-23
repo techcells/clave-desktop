@@ -27,19 +27,11 @@
   },
   "recognitionModels": [
     {
-      "name": "Tesseract recognition model eng (tessdata_best)",
-      "version": "commit e12c65a9 (2024-03-09), SHA-256 8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba",
-      "files": ["eng.traineddata"],
-      "licence": "Apache-2.0",
-      "source": "https://github.com/tesseract-ocr/tessdata_best",
-      "platforms": ["linux"]
-    },
-    {
-      "name": "Tesseract recognition model por (tessdata_best)",
-      "version": "commit e12c65a9 (2024-03-09), SHA-256 711de9dbb8052067bd42f16b9119967f30bada80d57e2ef24f65d09f531adb04",
+      "name": "Tesseract recognition model por (tessdata_fast)",
+      "version": "commit 87416418 (2024-08-01), SHA-256 c4932b937207a9514b7514d518b931a99938c02a28a5a5a553f8599ed58b7deb",
       "files": ["por.traineddata"],
       "licence": "Apache-2.0",
-      "source": "https://github.com/tesseract-ocr/tessdata_best",
+      "source": "https://github.com/tesseract-ocr/tessdata_fast",
       "platforms": ["linux"]
     }
   ],

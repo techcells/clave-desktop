@@ -137,7 +137,10 @@ export function createCaptureLoop(deps: {
   onNothingRead: (counts: BarrenCounts, since: number) => void;
   /** The notice raised by `onNothingRead` no longer holds. Called only if one was raised. */
   onReadingAgain: () => void;
+  /** How long one read may take on this system (`shell/platform.ts` `readBudgetMs`); `READ_BUDGET_MS` when not given. */
+  readBudgetMs?: number;
 }): CaptureLoop {
+  const readBudget = deps.readBudgetMs ?? READ_BUDGET_MS;
   const {reader, pipeline, idleSeconds, now} = deps;
   let active = false;
   let generation = 0;
@@ -291,8 +294,8 @@ export function createCaptureLoop(deps: {
       // `expect: front` is what the reader is allowed to capture: the window, and only the window,
       // the core has just approved. Everything else it answers `windowGone` without capturing.
       calling = "read";
-      const read = reader.read({budgetMs: READ_BUDGET_MS, expect: front});
-      const result = parseReadResult(await withReaderTimeout(read, READ_BUDGET_MS + READER_CALL_TIMEOUT_MS));
+      const read = reader.read({budgetMs: readBudget, expect: front});
+      const result = parseReadResult(await withReaderTimeout(read, readBudget + READER_CALL_TIMEOUT_MS));
       calling = null;
       if (mine !== generation) return plain("stopped");
       // Only `failed` and `timeout` are the reader's fault. `locked`, `black` and `windowGone` are

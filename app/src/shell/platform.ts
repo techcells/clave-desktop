@@ -1,4 +1,5 @@
 import {posix} from "node:path";
+import {READ_BUDGET_MS, READ_BUDGET_MS_LINUX} from "../main/constants";
 import type {AppInfo} from "../shared/ipc";
 
 /**
@@ -9,6 +10,11 @@ export function platformName(nodePlatform: string): NonNullable<AppInfo["platfor
   if (nodePlatform === "win32") return "windows";
   if (nodePlatform === "linux") return "linux";
   return "mac";
+}
+
+/** The time one read may take on this system (`READ_BUDGET_MS_LINUX` on Linux, the shared budget elsewhere). */
+export function readBudgetMs(nodePlatform: string): number {
+  return nodePlatform === "linux" ? READ_BUDGET_MS_LINUX : READ_BUDGET_MS;
 }
 
 /**

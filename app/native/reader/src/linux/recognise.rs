@@ -1,9 +1,12 @@
 //! Recognition on Linux: where the models are, the one engine, and a captured window to lines.
 //!
-//! The models are `tessdata_best` `eng` and `por`, loaded as `por+eng`. They are looked for in the
-//! directory named by `CLAVE_TESSDATA` (the app sets it, Task 5) and otherwise in `tessdata` beside
-//! the helper binary (where the packages put them, Task 9), and used only if both match the SHA-256
-//! pinned below: a mismatch means no recognition, never a guess with another model. The engine is
+//! The model is `tessdata_fast` `por`, alone (owner decision, 2026-09-24, Linux plan Task 11: live
+//! reads with `tessdata_best` `por+eng` ran past the read budget a third of the time; the fast
+//! Portuguese model reads English too and meets every accuracy bar but the accent one, see
+//! `ACCENTS_BAR`). It is looked for in the directory named by `CLAVE_TESSDATA` (the app sets it,
+//! Task 5) and otherwise in `tessdata` beside the helper binary (where the packages put it, Task 9),
+//! and used only if it matches the SHA-256 pinned below: a mismatch means no recognition, never a
+//! guess with another model. The engine is
 //! created on first use (the warm-up at start pays for it, hashing included) and shared: only the
 //! worker recognises, and a lock keeps it so.
 
@@ -18,15 +21,21 @@ use super::tesseract::Engine;
 use crate::frame::Frame;
 use crate::text::Line;
 
-/// The languages, Portuguese first: with English first the accents were lost (2026-09-23).
-pub const LANGUAGES: &str = "por+eng";
+/// Portuguese alone: a second language (`por+eng`) is what made the slow reads (measured 2026-09-24),
+/// and English alone loses the accents (2026-09-23).
+pub const LANGUAGES: &str = "por";
 
-/// The model files, with the SHA-256 of the `tessdata_best` copies the accuracy test passed with
-/// (fetched 2026-09-23; `eng` 15,400,601 bytes, `por` 8,159,939 bytes).
-pub const MODELS: [(&str, &str); 2] = [
-    ("eng.traineddata", "8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba"),
-    ("por.traineddata", "711de9dbb8052067bd42f16b9119967f30bada80d57e2ef24f65d09f531adb04"),
+/// The model file, with the SHA-256 of the `tessdata_fast` copy the accuracy test was measured with
+/// (commit 87416418 of 2024-08-01, 1,982,756 bytes).
+pub const MODELS: [(&str, &str); 1] = [
+    ("por.traineddata", "c4932b937207a9514b7514d518b931a99938c02a28a5a5a553f8599ed58b7deb"),
 ];
+
+/// The accent bar on Linux. The shared bar is every accent right (1.00); the fast Portuguese model
+/// measured 0.98 (about one accent in fifty wrong), which the owner accepted for the speed on
+/// 2026-09-24. Set a step below the measurement, so the test notices if it gets worse.
+#[cfg(test)]
+const ACCENTS_BAR: f64 = 0.97;
 
 /// Where the models are: `CLAVE_TESSDATA` if set and not empty, else `tessdata` beside `exe`.
 pub fn models_dir(variable: Option<&str>, exe: Option<&Path>) -> Option<PathBuf> {
@@ -160,10 +169,10 @@ mod tests {
         println!("median {} ms, max {} ms, over {} pages", times[times.len() / 2], times[times.len() - 1], times.len());
         for (group, bar) in thresholds {
             let (accuracy, accents) = worst[group];
-            println!("{group:9} min {accuracy:.3} (bar {bar}){}", if group == "pt" { format!(", accents {accents:.2} (bar 1.00)") } else { String::new() });
+            println!("{group:9} min {accuracy:.3} (bar {bar}){}", if group == "pt" { format!(", accents {accents:.2} (bar {ACCENTS_BAR:.2})") } else { String::new() });
             assert!(accuracy >= bar, "{group} {accuracy} below {bar}");
             if group == "pt" {
-                assert!(accents >= 1.0, "pt accents {accents}");
+                assert!(accents >= ACCENTS_BAR, "pt accents {accents}");
             }
         }
     }

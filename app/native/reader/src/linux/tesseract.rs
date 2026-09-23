@@ -3,8 +3,7 @@
 //! A hand-written binding rather than a crate: a few calls of Tesseract 5's stable C API, and one
 //! of Leptonica's, with no build-time code generation and nothing else pulled in. The library is
 //! loaded at run time under the names the distributions give it (`library_names`), not linked. The engine is created once, with the
-//! `tessdata_best` models loaded as `por+eng` (Portuguese first: with English first the accents were
-//! lost, measured 2026-09-23), and used by one thread at a time.
+//! model `recognise.rs` names (the fast Portuguese one since 2026-09-24), and used by one thread at a time.
 //!
 //! Tesseract must run on one thread (`OMP_THREAD_LIMIT=1`): with all threads, one read under load
 //! took 15 s. OpenMP reads that variable when the library loads (at the first `dlopen` here), and

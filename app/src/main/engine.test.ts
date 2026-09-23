@@ -65,6 +65,23 @@ describe("engine", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(Date.UTC(2026, 8, 17, 9, 0)); });
   afterEach(() => { vi.useRealTimers(); });
 
+  it("reads with the budget it was given (Linux: shell/platform.ts readBudgetMs), else the shared one", async () => {
+    for (const [given, expected] of [[2_500, 2_500], [undefined, 1_500]] as const) {
+      const h = createHarness();
+      const budgets: number[] = [];
+      const read = h.reader.read.bind(h.reader);
+      h.reader.read = (opts) => { budgets.push(opts.budgetMs); return read(opts); };
+      const engine = await ready(h, given === undefined ? {} : {readBudgetMs: given});
+      expect(await engine.setCapture(true)).toEqual({ok: true});
+      h.reader.front = {app: "Code", title: "report.sql"};
+      h.reader.text = WORK;
+      await vi.advanceTimersByTimeAsync(PIPELINE_TICK_MS);
+      expect(budgets.length, String(given)).toBeGreaterThan(0);
+      expect(new Set(budgets), String(given)).toEqual(new Set([expected]));
+      await engine.setCapture(false);
+    }
+  });
+
   it("a fresh install is off and says exactly what is missing", async () => {
     const h = createHarness();
     h.downloader.set({kind: "missing"});

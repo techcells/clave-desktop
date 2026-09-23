@@ -69,7 +69,7 @@ export const DEFAULT_REPETITIONS = 5;
 export const GUARD_TIMEOUT_MS = 15_000;
 export const GUARD_POLL_MS = 500;
 
-/** The read budget the harness gives the helper. The app's own loop uses 1 500 ms; this is looser. */
+/** The read budget the harness gives the helper. The app's own loop uses 1 500 ms (2 500 ms on Linux); this is looser. */
 export const EVAL_READ_BUDGET_MS = 5_000;
 
 /** How long `observe` mode watches the front window for owner-staged windows, and how often. */

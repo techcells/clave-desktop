@@ -14,7 +14,7 @@
 //              lockfile, then pruned to the Mac-arm64 packages.
 //   helper     dist/native/clave-reader goes NEXT to the bundle root, not into the asar: it is
 //              signed on its own and copied to Contents/MacOS by the bundle step.
-//   models     Linux only: Tesseract's two `tessdata_best` models, from the folder CLAVE_TESSDATA
+//   models     Linux only: Tesseract's `tessdata_fast` Portuguese model, from the folder CLAVE_TESSDATA
 //              names, checked against the SHA-256s the reader pins, staged beside the helper.
 import {spawnSync} from "node:child_process";
 import {createHash} from "node:crypto";
@@ -45,18 +45,17 @@ export const DIST_STAGING_ONLY = ["bundled-packages.json"];
  * stage test reads the Rust source and fails when the two lists differ.
  */
 export const TESSDATA_MODELS = [
-  {file: "eng.traineddata", sha256: "8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba"},
-  {file: "por.traineddata", sha256: "711de9dbb8052067bd42f16b9119967f30bada80d57e2ef24f65d09f531adb04"}
+  {file: "por.traineddata", sha256: "c4932b937207a9514b7514d518b931a99938c02a28a5a5a553f8599ed58b7deb"}
 ];
 
 /**
- * Where the models come from: `tessdata_best` at a pinned commit (the tip of main since 2024-03-09),
- * whose two files are byte for byte the ones measured (same git blob ids, checked 2026-09-23). CI
- * downloads from these URLs; staging checks the SHA-256s above whatever the source.
+ * Where the model comes from: `tessdata_fast` at a pinned commit (the tip of main since 2024-08-01), the
+ * file measured on 2026-09-24 (owner decision, Linux plan Task 11). CI downloads from these URLs;
+ * staging checks the SHA-256 above whatever the source.
  */
 export const TESSDATA_SOURCE = {
-  repository: "tesseract-ocr/tessdata_best",
-  commit: "e12c65a915945e4c28e237a9b52bc4a8f39a0cec",
+  repository: "tesseract-ocr/tessdata_fast",
+  commit: "87416418657359cb625c412a48b6e1d6d41c29bd",
   get urls() { return TESSDATA_MODELS.map((m) => `https://raw.githubusercontent.com/${this.repository}/${this.commit}/${m.file}`); }
 };
 
@@ -478,7 +477,7 @@ export function stage({appDir, argv, env, home, log, err, platform = process.pla
   // model refuses the run.
   const modelsFrom = target.models ? env.CLAVE_TESSDATA : null;
   if (target.models) {
-    if (!modelsFrom) return fail("MODELS_MISSING", "set CLAVE_TESSDATA to the folder holding tessdata_best eng.traineddata and por.traineddata");
+    if (!modelsFrom) return fail("MODELS_MISSING", "set CLAVE_TESSDATA to the folder holding tessdata_fast por.traineddata");
     const found = target.models.map((m) => ({file: m.file, sha256: existsSync(join(modelsFrom, m.file)) && !lstatSync(join(modelsFrom, m.file)).isSymbolicLink() ? sha256(join(modelsFrom, m.file)) : null}));
     const problem = checkModels(found);
     if (problem) return fail(problem.code, problem.detail);

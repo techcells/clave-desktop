@@ -146,6 +146,8 @@ export interface EngineDeps {
    * extension). Counted before the permission ones, because the extension comes before the share.
    */
   systemBlockers?: {current(): readonly Blocker[]; onChange(cb: () => void): () => void};
+  /** How long one read may take on this system (`shell/platform.ts` `readBudgetMs`); the shared budget when not given. */
+  readBudgetMs?: number;
 }
 
 export interface Engine {
@@ -262,6 +264,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
 
   const loop = createCaptureLoop({
     reader, idleSeconds: deps.idleSeconds, now,
+    ...(deps.readBudgetMs === undefined ? {} : {readBudgetMs: deps.readBudgetMs}),
     pipeline: {mayCapture: (front) => pipeline.mayCapture(front), ingest: (read) => pipeline.ingest(read)},
     onReaderProblem: () => {
       readerProblem = true;

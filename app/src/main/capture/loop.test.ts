@@ -6,7 +6,7 @@ import {createFakeReader} from "../testing/fakeReader";
 import type {FailureDetail} from "../ports/reader";
 import {createCaptureLoop, CYCLE_CLASS, cycleClass, FAILED_DETAIL_KEY, type BarrenOutcome} from "./loop";
 
-function setup(opts: {allow?: (front: FrontWindow) => boolean; ingest?: () => IngestOutcome} = {}) {
+function setup(opts: {allow?: (front: FrontWindow) => boolean; ingest?: () => IngestOutcome; readBudgetMs?: number} = {}) {
   const reader = createFakeReader();
   reader.text = "some recognised text";
   const asked: FrontWindow[] = [];
@@ -19,7 +19,8 @@ function setup(opts: {allow?: (front: FrontWindow) => boolean; ingest?: () => In
   const onReaderProblem = vi.fn();
   const onNothingRead = vi.fn();
   const onReadingAgain = vi.fn();
-  const loop = createCaptureLoop({reader, pipeline, idleSeconds: () => idle, now: () => Date.now(), onReaderProblem, onNothingRead, onReadingAgain});
+  const loop = createCaptureLoop({reader, pipeline, idleSeconds: () => idle, now: () => Date.now(), onReaderProblem, onNothingRead, onReadingAgain,
+    ...(opts.readBudgetMs === undefined ? {} : {readBudgetMs: opts.readBudgetMs})});
   const settle = () => vi.advanceTimersByTimeAsync(0);
   return {reader, pipeline, asked, ingested, loop, onReaderProblem, onNothingRead, onReadingAgain, settle, setIdle: (s: number) => { idle = s; }};
 }
@@ -27,6 +28,28 @@ function setup(opts: {allow?: (front: FrontWindow) => boolean; ingest?: () => In
 describe("capture loop", () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
+
+  it("reads with the platform's budget when given one (Linux, 2026-09-24), else the shared one, and waits that long plus the call timeout", async () => {
+    for (const [given, budget] of [[undefined, READ_BUDGET_MS], [2_500, 2_500]] as const) {
+      const {reader, loop, settle} = setup({readBudgetMs: given});
+      const budgets: number[] = [];
+      const read = reader.read.bind(reader);
+      reader.read = (opts) => { budgets.push(opts.budgetMs); return read(opts); };
+      loop.start();
+      await settle();
+      expect(budgets, String(given)).toEqual([budget]);
+      loop.stop();
+    }
+    const slow = setup({readBudgetMs: 2_500});
+    slow.reader.read = () => new Promise(() => undefined);
+    slow.loop.start();
+    await slow.settle();
+    await vi.advanceTimersByTimeAsync(READ_BUDGET_MS + READER_CALL_TIMEOUT_MS);
+    expect(slow.loop.stats().timeout, "not yet: the Linux wait is longer").toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2_500 - READ_BUDGET_MS);
+    expect(slow.loop.stats()).toMatchObject({timeout: 1, timeoutRead: 1});
+    slow.loop.stop();
+  });
 
   it("asks the core first, reads, and hands the text over with the core-checked window", async () => {
     const {reader, asked, ingested, loop, settle} = setup();

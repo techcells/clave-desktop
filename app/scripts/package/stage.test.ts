@@ -294,30 +294,38 @@ describe("Linux: one target per architecture, the extension in the asar, the mod
     expect(forbidden("node_modules/@node-llama-cpp/linux-x64/bins/linux-x64/libggml-base.so", "linux")).not.toBeNull();
   });
 
-  it("the models are the reader's: the same two files and SHA-256s recognise.rs pins", () => {
+  it("the models are the reader's: the same files and SHA-256s recognise.rs pins (the fast Portuguese model since 2026-09-24)", () => {
     const rust = readFileSync(fileURLToPath(new URL("../../native/reader/src/linux/recognise.rs", import.meta.url)), "utf8");
     const start = rust.indexOf("pub const MODELS");
     const pinned = [...rust.slice(start, rust.indexOf("];", start)).matchAll(/\("([a-z]+\.traineddata)",\s*"([0-9a-f]{64})"\)/g)].map((m) => ({file: m[1], sha256: m[2]}));
-    expect(pinned).toHaveLength(2);
+    expect(pinned).toEqual([{file: "por.traineddata", sha256: "c4932b937207a9514b7514d518b931a99938c02a28a5a5a553f8599ed58b7deb"}]);
     expect(TESSDATA_MODELS).toEqual(pinned);
+    // The languages the reader loads are exactly the pinned files: a language without its file (English put
+    // back as "por+eng") would leave Tesseract unable to start and every Linux read failing.
+    const languages = /pub const LANGUAGES: &str = "([^"]+)";/.exec(rust)?.[1];
+    expect(languages).toBeDefined();
+    expect((languages ?? "").split("+").map((l) => `${l}.traineddata`).sort()).toEqual(pinned.map((m) => m.file).sort());
     for (const arch of ["x64", "arm64"]) expect(targetFor("linux", arch)?.models, arch).toBe(TESSDATA_MODELS);
     expect(targetFor("darwin")?.models).toBeUndefined();
   });
 
-  it("names where CI fetches the models: one pinned tessdata_best commit, one URL per model file", () => {
-    expect(TESSDATA_SOURCE.repository).toBe("tesseract-ocr/tessdata_best");
+  it("names where CI fetches the models: one pinned tessdata_fast commit, one URL per model file", () => {
+    expect(TESSDATA_SOURCE.repository).toBe("tesseract-ocr/tessdata_fast");
+    expect(TESSDATA_SOURCE.commit).toBe("87416418657359cb625c412a48b6e1d6d41c29bd");
     expect(TESSDATA_SOURCE.commit).toMatch(/^[0-9a-f]{40}$/);
-    expect(TESSDATA_SOURCE.urls).toEqual(TESSDATA_MODELS.map((m) => `https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/${TESSDATA_SOURCE.commit}/${m.file}`));
+    expect(TESSDATA_SOURCE.urls).toEqual(TESSDATA_MODELS.map((m) => `https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/${TESSDATA_SOURCE.commit}/${m.file}`));
   });
 
-  it("checkModels: both files, each with its pinned hash, or a refusal naming the file", () => {
+  it("checkModels: every pinned file, each with its pinned hash, or a refusal naming the file", () => {
     const good = TESSDATA_MODELS.map((m) => ({file: m.file, sha256: m.sha256}));
+    const first = good[0];
     expect(checkModels(good)).toBeNull();
-    expect(checkModels([...good].reverse())).toBeNull();
-    expect(checkModels(good.slice(1))).toEqual({code: "MODEL_MISSING", detail: good[0].file});
-    expect(checkModels([good[0], {file: good[1].file, sha256: null}])).toEqual({code: "MODEL_MISSING", detail: good[1].file});
-    expect(checkModels([good[0], {file: good[1].file, sha256: "0".repeat(64)}])).toEqual({code: "MODEL_HASH_WRONG", detail: good[1].file});
-    expect(checkModels([{file: good[0].file, sha256: good[1].sha256}, good[1]])).toEqual({code: "MODEL_HASH_WRONG", detail: good[0].file});
+    expect(checkModels([{file: "eng.traineddata", sha256: "1".repeat(64)}, ...good])).toBeNull();
+    expect(checkModels([])).toEqual({code: "MODEL_MISSING", detail: first.file});
+    expect(checkModels([{file: first.file, sha256: null}])).toEqual({code: "MODEL_MISSING", detail: first.file});
+    expect(checkModels([{file: first.file, sha256: "0".repeat(64)}])).toEqual({code: "MODEL_HASH_WRONG", detail: first.file});
+    // The best model of the same name, which the reader no longer pins, is refused too.
+    expect(checkModels([{file: first.file, sha256: "711de9dbb8052067bd42f16b9119967f30bada80d57e2ef24f65d09f531adb04"}])).toEqual({code: "MODEL_HASH_WRONG", detail: first.file});
   });
 
   it("the desktop name: the bundle id on Linux (the Wayland app id and the portal's identity), absent elsewhere and for dev", () => {

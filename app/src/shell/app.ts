@@ -32,7 +32,7 @@ import {linuxBatteryOutput, watchBattery} from "./batteryLevel";
 import {devEnv} from "./devEnv";
 import {resolveApiUrl} from "./apiUrl";
 import {launchMode} from "./launchMode";
-import {platformName, readerSpawnEnv} from "./platform";
+import {platformName, readBudgetMs, readerSpawnEnv} from "./platform";
 import {createLoopbackListener} from "./loopbackListener";
 import {openLicences} from "./licences";
 import {background, startFailureCode} from "./lifecycle";
@@ -340,6 +340,7 @@ async function start(): Promise<void> {
     notifyCaptureResumed: () => notify(COPY.notify.resumed, {silent: true}),
     ...(googleSignIn ? {googleSignIn} : {}),
     ...(screenGrant ? {alsoDelete: () => screenGrant.forget()} : {}),
+    readBudgetMs: readBudgetMs(process.platform),
     ...(gnomeExtension ? {systemBlockers: {current: () => extensionBlockers(gnomeExtension.state()), onChange: gnomeExtension.onChange}} : {})
   });
   const current = engine;
