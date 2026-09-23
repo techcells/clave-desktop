@@ -52,6 +52,13 @@ def answer(i):
             continue
         if m.get("id") == i:
             return m
+BADGE = re.compile(r"(^|[^a-zà-ÿ])(incognito|private|privat|inkognito|incógnito|anônima)", re.I)
+def label(text):
+    found = [name for name, hit in (("ADDRESS", "clave-probe" in text or "page.html" in text),
+                                    ("BADGE", BADGE.search(text) is not None),
+                                    ("PAGE", "Clave probe page" in text or "second line" in text)) if hit]
+    return "+".join(found) or "OTHER"
+
 send({"op": "grant", "token": open(token_file).read().strip()})
 send({"op": "frontWindow", "id": 1})
 window = answer(1).get("window")
@@ -64,19 +71,18 @@ if window is not None:
             break
 send({"op": "release"}); send({"op": "shutdown"}); p.wait(5)
 
-BADGE = re.compile(r"(^|[^a-zà-ÿ])(incognito|private|privat|inkognito|incógnito|anônima)", re.I)
-def label(text):
-    found = [name for name, hit in (("ADDRESS", "clave-probe" in text or "page.html" in text),
-                                    ("BADGE", BADGE.search(text) is not None),
-                                    ("PAGE", "Clave probe page" in text or "second line" in text)) if hit]
-    return "+".join(found) or "OTHER"
-
 print(f"{browser} {mode} {lang}:", None if window is None else (window.get("app"), window.get("bundleId")))
 if not result or not result.get("ok"):
     print("  read failed:", None if result is None else {k: result.get(k) for k in ("reason", "detail")})
 else:
     stats = result.get("stats", {})
-    print(f"  capture {stats.get('width')}x{stats.get('height')} px, scale {scale}")
+    print(f"  capture {stats.get('width')}x{stats.get('height')} px, scale {scale}, band {stats.get('bandPx')} px")
+    strip = result.get("toolbarText")
+    if strip is None:
+        print("  toolbar strip: none (not a measured browser)")
+    else:
+        print(f"  toolbar strip: address {label(strip).find('ADDRESS') >= 0} | private marker {BADGE.search(strip) is not None}"
+              f" | page text in it {'Clave probe page' in strip or 'second line' in strip}")
     for line in sorted(result.get("lines", []), key=lambda l: (l["topPx"], l["leftPx"])):
         if line["topPx"] / scale > 200:
             continue

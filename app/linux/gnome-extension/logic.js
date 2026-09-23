@@ -50,17 +50,57 @@ export function readerPathFileIsSafe(file, uid) {
  * or anything that holds a modal (a system dialog such as the Share-screen prompt, a top-bar menu,
  * the Alt+Tab switcher). Mutter's focus stays on the last window meanwhile, so without this the
  * reader would crop the window's rectangle out of the overview and read another window's thumbnail
- * under this window's name (L7, 2026-09-23). While it is true `Get()` answers no window. A state
- * that cannot be read counts as covered: unknown means do not capture.
+ * under this window's name (L7, 2026-09-23). A notification banner is drawn over the windows too,
+ * without a modal: a message from an excluded messenger would be read inside whatever window is
+ * focused (Task 6 review, reproduced live). While any of these is true `Get()` answers no window. A
+ * state that cannot be read counts as covered: unknown means do not capture.
  *
- * @param {unknown} state `{overviewVisible, modalCount}` as read from the shell
+ * @param {unknown} state `{overviewVisible, modalCount, bannerShowing}` as read from the shell
  * @returns {boolean}
  */
 export function shellCoversWindows(state) {
   if (state === null || typeof state !== "object") return true;
-  const {overviewVisible, modalCount} = /** @type {{overviewVisible: unknown, modalCount: unknown}} */ (state);
-  if (typeof overviewVisible !== "boolean" || !Number.isSafeInteger(modalCount) || modalCount < 0) return true;
-  return overviewVisible || modalCount > 0;
+  const {overviewVisible, modalCount, bannerShowing} =
+    /** @type {{overviewVisible: unknown, modalCount: unknown, bannerShowing: unknown}} */ (state);
+  if (typeof overviewVisible !== "boolean" || typeof bannerShowing !== "boolean"
+    || !Number.isSafeInteger(modalCount) || modalCount < 0) return true;
+  return overviewVisible || bannerShowing || modalCount > 0;
+}
+
+/** A rectangle `{x, y, width, height}` of finite numbers with a positive size, or null. */
+function area(rect) {
+  if (rect === null || typeof rect !== "object") return null;
+  const {x, y, width, height} = rect;
+  return [x, y, width, height].every((n) => typeof n === "number" && Number.isFinite(n)) && width > 0 && height > 0
+    ? {x, y, width, height}
+    : null;
+}
+
+/**
+ * Whether another program's window, stacked above the focused one on the current workspace, overlaps
+ * it: a picture-in-picture video or an always-on-top window. The reader crops the focused window's
+ * rectangle out of the whole screen, so anything drawn over it would be read under its name. The
+ * focused program's own windows above it (its menus, popups and dialogs) are its own content and
+ * pass. A pid or a frame that cannot be read counts as another program's window over it.
+ *
+ * @param {unknown} focused `{frame, pid}` of the focused window
+ * @param {unknown} above `[{frame, pid}]` of the windows showing above it
+ * @returns {boolean}
+ */
+export function othersCover(focused, above) {
+  if (focused === null || typeof focused !== "object" || !Array.isArray(above)) return true;
+  const frame = area(/** @type {{frame: unknown}} */ (focused).frame);
+  if (frame === null) return true;
+  const pid = /** @type {{pid: unknown}} */ (focused).pid;
+  const known = (value) => Number.isSafeInteger(value) && value > 0;
+  return above.some((window) => {
+    if (window === null || typeof window !== "object") return true;
+    const other = area(window.frame);
+    if (other === null) return true;
+    const overlaps = other.x < frame.x + frame.width && frame.x < other.x + other.width
+      && other.y < frame.y + frame.height && frame.y < other.y + other.height;
+    return overlaps && (!known(pid) || !known(window.pid) || window.pid !== pid);
+  });
 }
 
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
@@ -91,8 +131,9 @@ function rectangle(rect) {
  * dropped. The names are only descriptive, and a missing one is `null` (the title an empty string).
  *
  * `pid` is the process that owns the window, or `null` when Mutter does not know it. The reader
- * reads it only for a browser whose private-window badge is a word, to learn that browser's
- * interface language from the process's environment; an unknown pid there means "not English".
+ * uses it only for a browser whose private-window marker is a word: Chrome's interface language from
+ * the `--lang` its child processes carry, and Firefox's history mode from its profile; an unknown pid
+ * there means the window is withheld.
  *
  * @param {null | undefined | {
  *   id: unknown, title: unknown, appName: unknown, appId: unknown, wmClass: unknown, x11: unknown,

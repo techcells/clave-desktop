@@ -30,8 +30,25 @@ use crate::text::Line;
 /// from the recogniser as `OKHO B pexvwe VIHKorHVITO`, which matches nothing, so the Windows reader
 /// marks a Chrome it cannot show to be English as `band_withheld` (`win::chrome`), and such a window
 /// is refused before it is captured.
-const BANDS: &[(&str, f64)] =
-    &[("com.google.Chrome", 82.0), ("com.apple.Safari", 41.0), ("msedge.exe", 76.0), ("chrome.exe", 78.0)];
+///
+/// Linux keys the table by the desktop app id GNOME reports. Measured on 2026-09-23 in the arm64 VM
+/// (GNOME 46, Wayland, scale 1, throwaway profiles, English; L7): Chrome 154 (.deb,
+/// `google-chrome.desktop`) with the address row's lowest edge at 73 points (74 in an incognito
+/// window, the Incognito badge recognised inside that row) and the page's first line at 98; the table
+/// carries 74 plus 10%, rounded up. Firefox 156 (the Ubuntu snap, `firefox_firefox.desktop`) with the
+/// address row's lowest edge at 72 and the page at 100, its private-browsing label in the top row
+/// (15 to 30); the table carries 72 plus 10%, rounded up. The Linux reader withholds a Chrome it cannot
+/// show to be English (`linux::chrome`) and any Firefox window whose title is not a normal window's
+/// (`linux::firefox`). Not measured there: the bookmarks bar, fractional scales, Chrome's other
+/// channels and Mozilla's own .deb.
+const BANDS: &[(&str, f64)] = &[
+    ("com.google.Chrome", 82.0),
+    ("com.apple.Safari", 41.0),
+    ("msedge.exe", 76.0),
+    ("chrome.exe", 78.0),
+    ("google-chrome.desktop", 82.0),
+    ("firefox_firefox.desktop", 80.0),
+];
 
 /// The band this browser's chrome occupies, in PIXELS of a capture taken at `scale`, or `None` when
 /// the bundle id is not a browser whose toolbar has been measured.
@@ -129,6 +146,41 @@ mod tests {
         let strip = toolbar_text(&lines, Some("chrome.exe"), 1.5, height).expect("Chrome is measured");
         assert!(strip.contains("Incognito") && strip.contains("probe.html"), "{strip}");
         assert!(!strip.contains("FIRST PAGE LINE"), "{strip}");
+    }
+
+    #[test]
+    fn chrome_and_firefox_on_linux_keep_the_address_row_and_not_the_page() {
+        // The measured captures at scale 1 (L7, 2026-09-23): Chrome 857 px tall, Firefox 868 px.
+        let line = |text: &str, top: f64, bottom: f64, height: f64| Line {
+            text: text.to_owned(),
+            x: 0.1,
+            right: 0.3,
+            top: top / height,
+            bottom: bottom / height,
+        };
+        assert_eq!(band_px(Some("google-chrome.desktop"), 1.0), Some(82.0));
+        assert_eq!(band_px(Some("google-chrome.desktop"), 2.0), Some(164.0));
+        assert_eq!(band_px(Some("firefox_firefox.desktop"), 1.0), Some(80.0));
+        let chrome = [
+            line("ClaveProbePage", 15.0, 29.0, 857.0),
+            line("docs.example.com/guide Incognito", 55.0, 74.0, 857.0),
+            line("FIRST PAGE LINE", 98.0, 117.0, 857.0),
+        ];
+        let strip = toolbar_text(&chrome, Some("google-chrome.desktop"), 1.0, 857.0).expect("Chrome is measured");
+        assert!(strip.contains("Incognito") && strip.contains("docs.example.com"), "{strip}");
+        assert!(!strip.contains("FIRST PAGE LINE"), "{strip}");
+        let firefox = [
+            line("Private browsing", 15.0, 30.0, 868.0),
+            line("docs.example.com/guide", 56.0, 72.0, 868.0),
+            line("FIRST PAGE LINE", 100.0, 120.0, 868.0),
+        ];
+        let strip = toolbar_text(&firefox, Some("firefox_firefox.desktop"), 1.0, 868.0).expect("Firefox is measured");
+        assert!(strip.contains("Private browsing") && strip.contains("docs.example.com"), "{strip}");
+        assert!(!strip.contains("FIRST PAGE LINE"), "{strip}");
+        // Not measured: Chrome's other channels and Mozilla's .deb.
+        for id in ["google-chrome-beta.desktop", "google-chrome-unstable.desktop", "firefox.desktop"] {
+            assert_eq!(band_px(Some(id), 1.0), None, "{id}");
+        }
     }
 
     #[test]

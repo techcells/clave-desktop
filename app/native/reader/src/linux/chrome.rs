@@ -106,14 +106,15 @@ fn parent_of(stat: &str) -> Option<u32> {
 }
 
 /// Field 22, the start time in clock ticks since boot: with the pid, it names one process.
-fn start_time(stat: &str) -> Option<u64> {
+pub(super) fn start_time(stat: &str) -> Option<u64> {
     fields_after_name(stat)?.get(19)?.parse().ok()
 }
 
 /// The `--lang` values of the processes descended from `root` (not `root` itself), at most
 /// [`MAX_DEPTH`] below it.
 fn descendant_langs(processes: &[Process], root: u32) -> Vec<String> {
-    let parent = |pid: u32| processes.iter().find(|process| process.pid == pid).map(|process| process.parent);
+    let parents: std::collections::HashMap<u32, u32> = processes.iter().map(|process| (process.pid, process.parent)).collect();
+    let parent = |pid: u32| parents.get(&pid).copied();
     let below_root = |process: &Process| {
         let mut ancestor = process.parent;
         for _ in 0..MAX_DEPTH {
@@ -151,10 +152,10 @@ fn decide(langs: &[String]) -> bool {
 }
 
 /// "en", or English with a territory: "en-US", "en-GB", "en_US". Nothing that merely starts with
-/// the letters "en".
+/// the letters "en", and not Chrome's accented pseudolocale `en-XA`.
 fn is_english(tag: &str) -> bool {
-    let tag = tag.trim().to_ascii_lowercase();
-    tag == "en" || tag.starts_with("en-") || tag.starts_with("en_")
+    let tag = tag.trim().to_ascii_lowercase().replace('_', "-");
+    (tag == "en" || tag.starts_with("en-")) && tag != "en-xa"
 }
 
 #[cfg(test)]
@@ -244,7 +245,8 @@ mod tests {
         for tag in ["en", "EN", "en-US", "en-GB", "en_US", " en-us "] {
             assert!(is_english(tag), "{tag}");
         }
-        for tag in ["", "eng", "enx", "es", "pt-BR", "de-EN", "en\u{fffd}"] {
+        // `en-XA` is Chrome's accented pseudolocale ("Ĩñçõĝñĩţõ"): not the English word (Task 6 review).
+        for tag in ["", "eng", "enx", "es", "pt-BR", "de-EN", "en\u{fffd}", "en-XA", "en_xa", "EN-XA"] {
             assert!(!is_english(tag), "{tag}");
         }
     }

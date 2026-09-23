@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {mayAnswer, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows} from "./logic.js";
+import {mayAnswer, othersCover, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows} from "./logic.js";
 
 const READER = "/opt/Clave Agent/clave-reader";
 
@@ -107,23 +107,62 @@ describe("shapeAnswer", () => {
 });
 
 describe("shellCoversWindows", () => {
-  it("is false only when the overview is hidden and GNOME Shell holds no modal", () => {
-    expect(shellCoversWindows({overviewVisible: false, modalCount: 0})).toBe(false);
+  const clear = {overviewVisible: false, modalCount: 0, bannerShowing: false};
+
+  it("is false only when the overview is hidden, GNOME Shell holds no modal and no banner shows", () => {
+    expect(shellCoversWindows(clear)).toBe(false);
   });
 
   it("is true with the overview shown, or any modal (a system dialog, a top-bar menu, the window switcher)", () => {
-    expect(shellCoversWindows({overviewVisible: true, modalCount: 0})).toBe(true);
-    expect(shellCoversWindows({overviewVisible: true, modalCount: 1})).toBe(true);
-    expect(shellCoversWindows({overviewVisible: false, modalCount: 1})).toBe(true);
-    expect(shellCoversWindows({overviewVisible: false, modalCount: 3})).toBe(true);
+    expect(shellCoversWindows({...clear, overviewVisible: true})).toBe(true);
+    expect(shellCoversWindows({...clear, overviewVisible: true, modalCount: 1})).toBe(true);
+    expect(shellCoversWindows({...clear, modalCount: 1})).toBe(true);
+    expect(shellCoversWindows({...clear, modalCount: 3})).toBe(true);
+  });
+
+  it("is true while a notification banner shows: it is drawn over windows without a modal (Task 6 review)", () => {
+    expect(shellCoversWindows({...clear, bannerShowing: true})).toBe(true);
   });
 
   it("is true when the shell's state cannot be read, because unknown means do not capture", () => {
-    for (const state of [null, undefined, {}, {overviewVisible: false}, {modalCount: 0},
-      {overviewVisible: "no", modalCount: 0}, {overviewVisible: false, modalCount: -1},
-      {overviewVisible: false, modalCount: 0.5}, {overviewVisible: false, modalCount: "0"}]) {
+    for (const state of [null, undefined, {}, {overviewVisible: false, modalCount: 0},
+      {...clear, overviewVisible: "no"}, {...clear, modalCount: -1}, {...clear, modalCount: 0.5},
+      {...clear, modalCount: "0"}, {...clear, bannerShowing: undefined}, {...clear, bannerShowing: 0}]) {
       expect(shellCoversWindows(state), JSON.stringify(state)).toBe(true);
     }
+  });
+});
+
+describe("othersCover", () => {
+  const focused = {frame: {x: 100, y: 100, width: 800, height: 600}, pid: 2143};
+  const above = (x: number, y: number, width: number, height: number, pid: unknown = 3000) => ({frame: {x, y, width, height}, pid});
+
+  it("is false with nothing above, or only windows that do not overlap it", () => {
+    expect(othersCover(focused, [])).toBe(false);
+    expect(othersCover(focused, [above(0, 0, 100, 100), above(900, 100, 200, 200), above(100, 700, 800, 50)])).toBe(false);
+  });
+
+  it("is true when another program's window above it overlaps it at all (picture-in-picture, always on top)", () => {
+    expect(othersCover(focused, [above(850, 650, 300, 200)])).toBe(true);
+    expect(othersCover(focused, [above(0, 0, 101, 101)])).toBe(true);
+    expect(othersCover(focused, [above(0, 0, 2000, 2000)])).toBe(true);
+  });
+
+  it("lets the focused program's own windows above it (its menus and popups) pass", () => {
+    expect(othersCover(focused, [above(150, 150, 200, 300, 2143)])).toBe(false);
+  });
+
+  it("is true when either program is unknown or a frame cannot be read", () => {
+    expect(othersCover(focused, [above(150, 150, 200, 300, null)])).toBe(true);
+    expect(othersCover({...focused, pid: null}, [above(150, 150, 200, 300, 2143)])).toBe(true);
+    expect(othersCover(focused, [{frame: null, pid: 3000}])).toBe(true);
+    expect(othersCover(focused, [above(150, 150, Number.NaN, 300)])).toBe(true);
+    expect(othersCover({frame: null, pid: 2143}, [])).toBe(true);
+    // Mutter says -1 for a pid it does not know: two unknowns are not the same program.
+    expect(othersCover({...focused, pid: -1}, [above(150, 150, 200, 300, -1)])).toBe(true);
+    // A focused window with no size cannot be shown to be uncovered.
+    expect(othersCover({frame: {x: 100, y: 100, width: 0, height: 600}, pid: 2143}, [])).toBe(true);
+    expect(othersCover(focused, null)).toBe(true);
   });
 });
 

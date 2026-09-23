@@ -10,6 +10,7 @@ pub mod capture;
 pub mod chrome;
 pub mod crop;
 pub mod extension;
+pub mod firefox;
 pub mod focus;
 pub mod ids;
 pub mod portal;
@@ -55,14 +56,22 @@ pub fn same_place(a: &ExtensionWindow, b: &ExtensionWindow) -> bool {
     a.mutter_id == b.mutter_id && a.frame == b.frame && a.monitor_frame == b.monitor_frame
 }
 
+/// What is remembered after an answer from the extension: a window updates the sighting as
+/// [`seen_now`] does, and NO window (nothing focused, or GNOME Shell covering the windows with the
+/// overview, a menu or a banner) forgets it, so a window seen again afterwards starts a new `since`
+/// and no frame from while it was covered is used (Task 6 review).
+pub fn seen_after(previous: Option<Seen>, answer: Option<&ExtensionWindow>, now: Instant) -> Option<Seen> {
+    answer.map(|window| seen_now(previous, window, now))
+}
+
 static SEEN: Mutex<Option<Seen>> = Mutex::new(None);
 
-/// Record a sighting of the focused window and answer since when it has looked like this.
-fn note(window: &ExtensionWindow) -> Instant {
+/// Record an answer from the extension (`None` for no window, or for an answer that could not be
+/// had) and, for a window, answer since when it has looked like this.
+fn note(answer: Option<&ExtensionWindow>) -> Option<Instant> {
     let mut seen = SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let current = seen_now(*seen, window, Instant::now());
-    *seen = Some(current);
-    current.since
+    *seen = seen_after(*seen, answer, Instant::now());
+    seen.map(|current| current.since)
 }
 
 /// Make sure Tesseract runs on one thread. OpenMP reads `OMP_THREAD_LIMIT` when the library is
@@ -107,15 +116,25 @@ pub fn run_event_loop() -> ! {
 
 /// What the rest of the helper is told about a window, given the handle `ids` issues for it.
 pub fn window_info(window: &ExtensionWindow, ids: &mut IdMap) -> WindowInfo {
-    window_info_judged(window, ids, chrome::interface_is_english)
+    window_info_judged(window, ids, chrome::interface_is_english, firefox::may_be_permanently_private)
 }
 
-/// [`window_info`], with the question "is the Chrome running as this pid in English?" passed in.
-fn window_info_judged(window: &ExtensionWindow, ids: &mut IdMap, english: impl FnOnce(Option<u32>) -> bool) -> WindowInfo {
+/// [`window_info`], with the two questions about a browser's process passed in: "is the Chrome
+/// running as this pid in English?" and "may the Firefox running as this pid be in 'Never remember
+/// history' mode?".
+fn window_info_judged(
+    window: &ExtensionWindow,
+    ids: &mut IdMap,
+    english: impl FnOnce(Option<u32>) -> bool,
+    permanently_private: impl FnOnce(Option<u32>) -> bool,
+) -> WindowInfo {
     let bundle_id = window.bundle_id();
     // Asked on every call rather than remembered, as on Windows: a Chrome restarted in another
-    // language keeps its app id.
-    let band_withheld = chrome::is_chrome(bundle_id.as_deref()) && !english(window.pid);
+    // language keeps its app id. Firefox marks a private window in its title, in its interface
+    // language, so it is read only when the title has the shape of a normal window (`firefox`).
+    let bundle = bundle_id.as_deref();
+    let band_withheld = (chrome::is_chrome(bundle) && !english(window.pid))
+        || (firefox::is_firefox(bundle) && (!firefox::title_is_normal(&window.title) || permanently_private(window.pid)));
     WindowInfo {
         window_id: ids.handle(window.mutter_id),
         app: window.app(),
@@ -174,8 +193,9 @@ impl Platform for LinuxPlatform {
     /// "no window". Task 7 of the Linux plan gives them a route to the app, for its "extension
     /// missing" blocker (Task 2 review).
     fn front_window(&self) -> Option<WindowInfo> {
-        let window = bus::focused_window().ok()??;
-        note(&window);
+        let answer = bus::focused_window().ok().flatten();
+        note(answer.as_ref());
+        let window = answer?;
         let mut ids = IDS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         Some(window_info(&window, &mut ids))
     }
@@ -189,15 +209,27 @@ impl Platform for LinuxPlatform {
         let mutter_id = mutter_id.ok_or(CaptureError::Gone)?;
         let window = match bus::focused_window() {
             Ok(Some(window)) if window.mutter_id == mutter_id => window,
-            Ok(_) => return Err(CaptureError::Gone),
-            Err(_) => return Err(CaptureError::Other),
+            Ok(other) => {
+                note(other.as_ref());
+                return Err(CaptureError::Gone);
+            }
+            Err(_) => {
+                note(None);
+                return Err(CaptureError::Other);
+            }
         };
-        let since = note(&window);
+        let since = note(Some(&window)).ok_or(CaptureError::Other)?;
         let frame = session::crop(&window, since)?;
         match bus::focused_window() {
             Ok(Some(after)) if same_place(&window, &after) => {}
-            Ok(_) => return Err(CaptureError::Gone),
-            Err(_) => return Err(CaptureError::Other),
+            Ok(other) => {
+                note(other.as_ref());
+                return Err(CaptureError::Gone);
+            }
+            Err(_) => {
+                note(None);
+                return Err(CaptureError::Other);
+            }
         }
         Ok(Captured { frame, scale: window.scale, image: () })
     }
@@ -240,6 +272,7 @@ mod tests {
         };
         let mut ids = IdMap::new();
         let asked = std::cell::Cell::new(None);
+        let no_firefox = |_: Option<u32>| -> bool { panic!("Chrome is not asked about Firefox's history mode") };
         let english = |answer: bool| {
             let asked = &asked;
             move |pid: Option<u32>| {
@@ -247,14 +280,54 @@ mod tests {
                 answer
             }
         };
-        assert!(!window_info_judged(&chrome("2143"), &mut ids, english(true)).band_withheld);
+        assert!(!window_info_judged(&chrome("2143"), &mut ids, english(true), no_firefox).band_withheld);
         assert_eq!(asked.take(), Some(Some(2143)), "asked about the window's own process");
-        assert!(window_info_judged(&chrome("2143"), &mut ids, english(false)).band_withheld);
-        assert!(window_info_judged(&chrome("null"), &mut ids, english(false)).band_withheld);
+        assert!(window_info_judged(&chrome("2143"), &mut ids, english(false), no_firefox).band_withheld);
+        assert!(window_info_judged(&chrome("null"), &mut ids, english(false), no_firefox).band_withheld);
         assert_eq!(asked.take(), Some(None));
         let xterm = parse_answer(XTERM).unwrap().unwrap();
-        assert!(!window_info_judged(&xterm, &mut ids, english(false)).band_withheld);
+        assert!(!window_info_judged(&xterm, &mut ids, english(false), no_firefox).band_withheld);
         assert_eq!(asked.take(), None, "a window that is not Chrome's is never asked about");
+    }
+
+    #[test]
+    fn a_firefox_window_is_withheld_unless_its_title_has_the_normal_shape() {
+        let firefox = |title: &str| {
+            let json = XTERM
+                .replace(r#""appId":"debian-xterm.desktop""#, r#""appId":"firefox_firefox.desktop""#)
+                .replace(r#""title":"admin@ubuntu: /""#, &format!("\"title\":{}", serde_json::to_string(title).unwrap()));
+            parse_answer(&json).unwrap().unwrap()
+        };
+        let mut ids = IdMap::new();
+        let never = |_: Option<u32>| -> bool { panic!("Firefox is not asked about its language") };
+        let history = |answer: bool| move |_: Option<u32>| answer;
+        assert!(!window_info_judged(&firefox("Page — Mozilla Firefox"), &mut ids, never, history(false)).band_withheld);
+        assert!(window_info_judged(&firefox("Page — Mozilla Firefox Private Browsing"), &mut ids, never, history(false)).band_withheld);
+        assert!(window_info_judged(&firefox("Page — Приватный просмотр Mozilla Firefox"), &mut ids, never, history(false)).band_withheld);
+        // "Never remember history": a normal title, and still private (Task 6 review).
+        assert!(window_info_judged(&firefox("Page — Mozilla Firefox"), &mut ids, never, history(true)).band_withheld);
+        // The same title on another app is not judged by Firefox's rules.
+        let xterm = parse_answer(&XTERM.replace("admin@ubuntu: /", "Page — Mozilla Firefox Private Browsing")).unwrap().unwrap();
+        let not_asked = |_: Option<u32>| -> bool { panic!("only Firefox is asked about its history mode") };
+        assert!(!window_info_judged(&xterm, &mut ids, never, not_asked).band_withheld);
+    }
+
+    #[test]
+    fn a_window_seen_again_after_no_window_starts_a_new_since() {
+        // The overview (or a menu) was up in between: the extension answered no window. A frame
+        // from that time shows the overview inside the window's rectangle, so the window's `since`
+        // must restart when it is seen again, even in the same place (Task 6 review).
+        let window = parse_answer(XTERM).unwrap().unwrap();
+        let start = Instant::now();
+        let covered = start + std::time::Duration::from_secs(1);
+        let back = start + std::time::Duration::from_secs(2);
+        let first = seen_after(None, Some(&window), start);
+        assert_eq!(first.map(|seen| seen.since), Some(start));
+        assert_eq!(seen_after(first, None, covered), None);
+        let again = seen_after(seen_after(first, None, covered), Some(&window), back);
+        assert_eq!(again.map(|seen| seen.since), Some(back));
+        // Without the gap, the same window keeps its since.
+        assert_eq!(seen_after(first, Some(&window), back).map(|seen| seen.since), Some(start));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 # Opens our own local page (title "ClaveProbePage") in a throwaway profile. Prints the app name, app
 # id, bandWithheld, and the title ONLY with our page's name replaced by <PAGE> (what remains is the
 # browser's own suffix); a title without our page name is printed as a length only.
-#   python3 l7_browser.py chrome|firefox normal|private LANG [wait-seconds]
+#   python3 l7_browser.py chrome|firefox normal|private|permanent LANG [wait-seconds]   (permanent: Firefox only)
 import json, os, shutil, subprocess, sys, time
 
 BIN = os.path.expanduser("~/clave/app/native/reader/target/release/clave-reader")
@@ -23,6 +23,10 @@ if browser == "chrome":
     command = f"google-chrome {flags} {'--incognito' if mode == 'private' else '--new-window'} {url}"
 else:
     os.makedirs(profile, exist_ok=True)
+    if mode == "permanent":
+        # "Never remember history": every window private, with a normal title (Task 6 review).
+        with open(os.path.join(profile, "user.js"), "w") as f:
+            f.write('user_pref("browser.privatebrowsing.autostart", true);\n')
     command = f"firefox --no-remote --profile {profile} {'--private-window' if mode == 'private' else '--new-window'} {url}"
 desktop = os.path.expanduser("~/.local/share/applications/clave-probe-l7.desktop")
 with open(desktop, "w") as f:

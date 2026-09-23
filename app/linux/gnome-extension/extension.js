@@ -8,8 +8,9 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 
-import {mayAnswer, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows} from './logic.js';
+import {mayAnswer, othersCover, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows} from './logic.js';
 
 const OBJECT_PATH = '/com/clave/Focus';
 const INTERFACE = 'com.clave.Focus';
@@ -19,6 +20,38 @@ const IFACE_XML = `<node><interface name="${INTERFACE}">
   <method name="Get"><arg type="s" direction="out" name="json"/></method>
   <signal name="FocusChanged"><arg type="t" name="window"/></signal>
 </interface></node>`;
+
+function rectOf(window) {
+    const rect = window.get_frame_rect();
+    return {x: rect.x, y: rect.y, width: rect.width, height: rect.height};
+}
+
+/**
+ * What GNOME Shell is drawing over the windows. The banner state is the message tray's own field
+ * (GNOME 46: `_notificationState`, 0 when hidden); anything but a number is passed on as unknown,
+ * which logic.js counts as covered.
+ */
+function shellState() {
+    const state = Main.messageTray?._notificationState;
+    return {
+        overviewVisible: Main.overview.visible,
+        modalCount: Main.modalCount,
+        bannerShowing: typeof state === 'number' ? state !== MessageTray.State.HIDDEN : undefined,
+    };
+}
+
+/** The windows showing above `focus` on the current workspace, as `{frame, pid}`, or null if unknown. */
+function windowsAbove(focus) {
+    // Window actors come in stacking order, bottom first.
+    const windows = global.get_window_actors().map(actor => ({actor, window: actor.get_meta_window()}));
+    const index = windows.findIndex(({window}) => window === focus);
+    if (index < 0)
+        return null;
+    const workspace = global.workspace_manager.get_active_workspace();
+    return windows.slice(index + 1)
+        .filter(({actor, window}) => actor.visible && !window.minimized && window.located_on_workspace(workspace))
+        .map(({window}) => ({frame: rectOf(window), pid: window.get_pid()}));
+}
 
 /** What logic.js needs to know about a Mutter window, or null. */
 function snapshotOf(window) {
@@ -34,7 +67,10 @@ function snapshotOf(window) {
     return {
         id: window.get_id(),
         title: window.get_title(),
-        appName: app?.get_name() ?? null,
+        // The `.desktop` entry's own Name, untranslated, so that the app's exclusion names (English,
+        // as on macOS and Windows) match in any language; `get_name()` would be translated (Task 6
+        // review: Seahorse is "Passwords and Keys" only in English).
+        appName: app ? (app.get_app_info()?.get_string('Name') || app.get_name()) : null,
         appId: app?.get_id() ?? null,
         wmClass: window.get_wm_class(),
         x11: window.get_client_type() === Meta.WindowClientType.X11,
@@ -86,8 +122,10 @@ export default class ClaveFocusExtension extends Extension {
             }
             let answer;
             try {
-                const covered = shellCoversWindows({overviewVisible: Main.overview.visible, modalCount: Main.modalCount});
-                answer = shapeAnswer(covered ? null : snapshotOf(global.display.focus_window));
+                const focus = global.display.focus_window;
+                const covered = shellCoversWindows(shellState())
+                    || (focus !== null && othersCover({frame: rectOf(focus), pid: focus.get_pid()}, windowsAbove(focus)));
+                answer = shapeAnswer(covered ? null : snapshotOf(focus));
             } catch {
                 // Never leave the reader waiting out the D-Bus timeout; it treats this as unknown focus.
                 invocation.return_dbus_error(FAILED, 'The focused window could not be described');
