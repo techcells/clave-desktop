@@ -1,5 +1,5 @@
-# Builds the macOS app and publishes it as a GitHub Release with the DMG. Runs the same pipeline as a
-# local build (docs/superpowers/plans/2026-09-22-packaging.md):
+# Builds the app for macOS, Windows and Linux and, on a tag, publishes them as a GitHub Release. Runs
+# the same pipeline as a local build (docs/superpowers/plans/2026-09-22-packaging.md):
 #   build:native -> build -> package:stage -> package:bundle -> package:sign -> package:artefacts
 #
 # Releasing: from a clean main, run `pnpm --dir app release` (bumpp). It asks patch/minor/major, bumps
@@ -8,13 +8,24 @@
 # "Run workflow" builds only: nothing is published, the files are attached to the run for 14 days.
 #
 # Flavour: the "Run workflow" input, else the repository variable CLAVE_FLAVOUR, else `internal`.
-# The release holds the DMG only; the run's attachment also has the ZIP, SHA256SUMS and the artefacts report.
+# Each system builds on its own and attaches its files to the run (the macOS DMG and ZIP, the Windows
+# installer and ZIP, the Linux .deb and .rpm, each with SHA256SUMS and the artefacts report). On a tag,
+# the `publish` job (owner decision, 2026-09-23) waits for all of them, checks every downloaded file
+# against its job's SHA256SUMS, and creates the release with the DMG, the Windows installer, the x64
+# .deb and .rpm and one SHA256SUMS over all of them. So a failure on one system no longer hides whether
+# the others built, and a release is published only when every build that ran succeeded.
 #
 # Windows (job windows-x64): the same pipeline on a Windows runner, ending in a per-user Inno Setup
 # installer and a ZIP instead of the DMG. Windows signing is not set up yet (owner decision,
 # 2026-09-23: unsigned for now), so the job runs for the internal flavour only and skips a release
-# build rather than ship an unsigned one. On a tag it adds the installer to the release the macOS job
-# created, which is why it waits for that job. It needs no secrets.
+# build rather than ship an unsigned one. It needs no secrets.
+#
+# Linux (job linux, one per architecture): the same pipeline on Ubuntu 24.04 runners, ending in a .deb
+# and an .rpm made by nfpm (Linux plan, Task 9). There is no code signing on Linux: the published
+# SHA256SUMS are the integrity check. x64 is public; arm64 is built for the internal flavour only, for
+# the arm64 VM, and never published (design decision 3); a failed arm64 build shows in the run but
+# never blocks publishing (owner decision, 2026-09-23). nfpm and the Tesseract models are fetched at
+# the versions and hashes the packaging scripts pin. It needs no secrets.
 #
 # Repository settings this needs (Settings -> Secrets and variables -> Actions):
 #   variable MACOS_SIGNING_IDENTITY   the certificate NAME, e.g. "Clave Agent Dev" or
@@ -36,8 +47,9 @@ on:
         options: [internal, release]
         default: internal
 
+# Read-only for the builds; only the publish job may write (it creates the release).
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -197,16 +209,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish the GitHub Release
-        if: github.ref_type == 'tag'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          name="Clave Agent $GITHUB_REF_NAME"
-          if [[ "$FLAVOUR" != "release" ]]; then name="$name (internal)"; fi
-          gh release create "$GITHUB_REF_NAME" app/out/"$FLAVOUR"/artefacts/*.dmg --title "$name" --generate-notes --latest
-
       - name: Remove the signing keychain
         if: always()
         run: |
@@ -215,8 +217,6 @@ jobs:
   windows-x64:
     # Unsigned for now: a release-flavour build is skipped here rather than shipped unsigned.
     if: ${{ (inputs.flavour || vars.CLAVE_FLAVOUR || 'internal') != 'release' }}
-    # On a tag the installer joins the release the macOS job creates, so that job goes first.
-    needs: macos-arm64
     runs-on: windows-2025
     timeout-minutes: 75
     defaults:
@@ -333,11 +333,205 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Add the installer to the GitHub Release
-        if: github.ref_type == 'tag'
+  linux:
+    name: linux-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+        flavour: ["${{ inputs.flavour || vars.CLAVE_FLAVOUR || 'internal' }}"]
+        # arm64 is internal only (design decision 3); the packaging scripts refuse a release arm64 build too.
+        exclude:
+          - arch: arm64
+            flavour: release
+    # Every Linux build is native: the scripts choose the architecture from the machine they run on.
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    # arm64 is never published, so its failure never blocks the release (the leg still shows as failed).
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
+    timeout-minutes: 60
+    env:
+      FLAVOUR: ${{ matrix.flavour }}
+      # Tesseract must run on one thread; the reader's tests expect it set (the app sets it at run time).
+      OMP_THREAD_LIMIT: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/native/reader
+          key: linux-${{ matrix.arch }}
+
+      - name: Cache the Electron zip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: electron-linux-${{ matrix.arch }}-${{ hashFiles('app/pnpm-lock.yaml') }}
+
+      - name: Install the system libraries
+        run: |
+          # clang and the PipeWire headers build the reader's `pipewire` crate (bindgen); Tesseract is
+          # loaded at run time, so only its library is needed, for the reader test that loads it; rpm
+          # lets the artefacts step read the .rpm back.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang pkg-config libpipewire-0.3-dev libtesseract5 rpm
+
+      - name: Check the configuration
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./app/package.json').version")
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match app/package.json version $version"; exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          # The scripts call pnpm and cargo by absolute path; point them at the runner's.
+          echo "CLAVE_PNPM=$(command -v pnpm)" >> "$GITHUB_ENV"
+          echo "CLAVE_CARGO=$(command -v cargo)" >> "$GITHUB_ENV"
+
+      - name: Install nfpm at the pinned version and hash
+        run: |
+          set -euo pipefail
+          # Version and archive hashes come from scripts/package/linux/packages.mjs (NFPM), the same
+          # place the artefacts step checks the version against.
+          read -r version sha < <(node --input-type=module -e 'import {NFPM} from "./app/scripts/package/linux/packages.mjs"; console.log(NFPM.version, NFPM.sha256[process.argv[1]])' "${{ matrix.arch }}")
+          archive="nfpm_${version}_Linux_$([[ "${{ matrix.arch }}" == x64 ]] && echo x86_64 || echo arm64).tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://github.com/goreleaser/nfpm/releases/download/v$version/$archive"
+          echo "$sha  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" nfpm
+          echo "CLAVE_NFPM=$RUNNER_TEMP/nfpm" >> "$GITHUB_ENV"
+
+      - name: Fetch the recognition models
+        run: |
+          set -euo pipefail
+          # From the tessdata_best commit scripts/package/stage.mjs pins (TESSDATA_SOURCE); staging checks
+          # each file against the SHA-256 the reader pins and refuses anything else.
+          dir="$RUNNER_TEMP/tessdata"; mkdir -p "$dir"
+          node --input-type=module -e 'import {TESSDATA_SOURCE} from "./app/scripts/package/stage.mjs"; console.log(TESSDATA_SOURCE.urls.join("\n"))' \
+            | while read -r url; do curl -fsSL -o "$dir/${url##*/}" "$url"; done
+          echo "CLAVE_TESSDATA=$dir" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          pnpm --dir app install --frozen-lockfile
+          node app/node_modules/electron/install.js
+          cargo fetch --locked --manifest-path app/native/reader/Cargo.toml
+
+      - name: Typecheck and test
+        run: |
+          pnpm --dir app typecheck
+          pnpm --dir app test
+          pnpm --dir app test:native
+
+      - name: Build
+        run: |
+          pnpm --dir app build:native
+          pnpm --dir app build -- --flavour "$FLAVOUR"
+
+      - name: Fill pnpm's metadata cache
+        run: |
+          # As on macOS: the offline re-resolve in package:stage silently skips the optional platform
+          # packages (the Linux model binaries) until one online resolve has filled pnpm's metadata cache.
+          scratch="$RUNNER_TEMP/metadata-warmup"; mkdir -p "$scratch"
+          cp app/pnpm-lock.yaml app/pnpm-workspace.yaml "$scratch/"
+          node -e 'const v=require("./app/package.json").dependencies["node-llama-cpp"]; process.stdout.write(JSON.stringify({name:"warmup",version:"0.0.0",private:true,dependencies:{"node-llama-cpp":v}}))' > "$scratch/package.json"
+          env -u CI pnpm install --prod --no-frozen-lockfile --config.node-linker=hoisted --ignore-scripts --dir "$scratch"
+          if [[ "${{ matrix.arch }}" == x64 ]]; then wanted="linux-x64 linux-x64-vulkan"; else wanted="linux-arm64"; fi
+          for p in $wanted; do
+            [[ -d "$scratch/node_modules/@node-llama-cpp/$p" ]] || { echo "::error::@node-llama-cpp/$p was not resolved"; exit 1; }
+          done
+          rm -rf "$scratch"
+
+      - name: Stage, bundle and fuse
+        run: |
+          pnpm --dir app package:stage -- --flavour "$FLAVOUR"
+          pnpm --dir app package:bundle -- --flavour "$FLAVOUR" --allow-download
+          # Fuses only: there is no code signing on Linux (the checksums are the integrity check).
+          pnpm --dir app package:sign -- --flavour "$FLAVOUR"
+
+      - name: Make the .deb and .rpm
+        run: |
+          # Writes SHA256SUMS beside the two packages, and reads both packages back (dpkg-deb, rpm).
+          pnpm --dir app package:artefacts -- --flavour "$FLAVOUR"
+          cat "app/out/$FLAVOUR/artefacts/SHA256SUMS"
+
+      - name: Keep the packaging logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}-logs
+          path: app/out/*/artefacts.partial/*.log
+          if-no-files-found: ignore
+
+      - name: Attach to the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: clave-agent-${{ env.FLAVOUR }}-${{ env.VERSION }}-linux-${{ matrix.arch }}
+          path: |
+            app/out/${{ env.FLAVOUR }}/artefacts/*.deb
+            app/out/${{ env.FLAVOUR }}/artefacts/*.rpm
+            app/out/${{ env.FLAVOUR }}/artefacts/SHA256SUMS
+            app/out/${{ env.FLAVOUR }}/artefacts/artefacts-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    # On a pushed tag only (a manual run builds only, even on a tag ref), and only when every build that
+    # ran succeeded. Windows is skipped (not failed) for a release flavour, which does not block
+    # publishing; the Linux arm64 leg cannot fail the Linux result (continue-on-error).
+    needs: [macos-arm64, windows-x64, linux]
+    if: >-
+      ${{ always() && github.event_name == 'push' && github.ref_type == 'tag'
+      && needs.macos-arm64.result == 'success'
+      && needs.linux.result == 'success'
+      && (needs.windows-x64.result == 'success' || needs.windows-x64.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      FLAVOUR: ${{ inputs.flavour || vars.CLAVE_FLAVOUR || 'internal' }}
+      WINDOWS_BUILT: ${{ needs.windows-x64.result == 'success' }}
+    steps:
+      - name: Download every build
+        uses: actions/download-artifact@v4
+        with:
+          pattern: clave-agent-*
+          path: builds
+
+      - name: Check and gather what is published
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Every downloaded file must match the checksum its own job computed (the Windows list is written
+          # by PowerShell with CRLF line ends: made plain first).
+          for dir in builds/*/; do (cd "$dir" && sed -i 's/\r$//' SHA256SUMS && sha256sum -c SHA256SUMS); done
+          mkdir publish
+          one() { local found=( $1 ); [[ ${#found[@]} -eq 1 && -f "${found[0]}" ]] || { echo "::error::expected one file for $1"; exit 1; }; cp "${found[0]}" publish/; }
+          one "builds/clave-agent-$FLAVOUR-$version-arm64/*.dmg"
+          if [[ "$WINDOWS_BUILT" == "true" ]]; then one "builds/clave-agent-$FLAVOUR-$version-win-x64/*-setup.exe"; fi
+          # Linux: x64 only; the arm64 build is internal and stays on the run.
+          one "builds/clave-agent-$FLAVOUR-$version-linux-x64/*.deb"
+          one "builds/clave-agent-$FLAVOUR-$version-linux-x64/*.rpm"
+          (cd publish && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $installer = Get-ChildItem "app/out/$env:FLAVOUR/artefacts/*-setup.exe" | Select-Object -First 1
-          gh release upload $env:GITHUB_REF_NAME $installer.FullName --clobber
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          set -euo pipefail
+          name="Clave Agent $GITHUB_REF_NAME"
+          if [[ "$FLAVOUR" != "release" ]]; then name="$name (internal)"; fi
+          gh release create "$GITHUB_REF_NAME" publish/* --repo "$GITHUB_REPOSITORY" --title "$name" --generate-notes --latest

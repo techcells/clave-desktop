@@ -49,6 +49,17 @@ export const TESSDATA_MODELS = [
   {file: "por.traineddata", sha256: "711de9dbb8052067bd42f16b9119967f30bada80d57e2ef24f65d09f531adb04"}
 ];
 
+/**
+ * Where the models come from: `tessdata_best` at a pinned commit (the tip of main since 2024-03-09),
+ * whose two files are byte for byte the ones measured (same git blob ids, checked 2026-09-23). CI
+ * downloads from these URLs; staging checks the SHA-256s above whatever the source.
+ */
+export const TESSDATA_SOURCE = {
+  repository: "tesseract-ocr/tessdata_best",
+  commit: "e12c65a915945e4c28e237a9b52bc4a8f39a0cec",
+  get urls() { return TESSDATA_MODELS.map((m) => `https://raw.githubusercontent.com/${this.repository}/${this.commit}/${m.file}`); }
+};
+
 /** The GNOME extension `scripts/build.mjs` copies into dist/ on Linux; the app installs it from there (`app.ts`, `here("gnome-extension")`). */
 export const DIST_LINUX_EXTENSION = ["gnome-extension/extension.js", "gnome-extension/logic.js", "gnome-extension/metadata.json"];
 

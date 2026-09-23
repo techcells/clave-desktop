@@ -7,7 +7,7 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as stageScript from "./stage.mjs";
 
-const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest, resolveOut, requestedFlavour, installedIds, pnpmInvocation, pickRedistDir, targetFor, TARGETS, TESSDATA_MODELS, checkModels, defaultTools, missingModelBinaries} = stageScript as {
+const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest, resolveOut, requestedFlavour, installedIds, pnpmInvocation, pickRedistDir, targetFor, TARGETS, TESSDATA_MODELS, checkModels, defaultTools, missingModelBinaries, TESSDATA_SOURCE} = stageScript as {
   pickRedistDir: (candidates: string[]) => {path: string; version: string} | null;
   shipList: (files: string[], flavour: string, platform?: string, arch?: string) => {ship?: string[]; helper?: string; error?: {code: string; path: string}};
   runtimePackageJson: (a: {flavour: string; version: string; nodeLlamaCppVersion: string; platform?: string}) => Record<string, unknown>;
@@ -18,6 +18,7 @@ const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest
   TARGETS: Record<string, unknown>;
   TESSDATA_MODELS: Array<{file: string; sha256: string}>;
   checkModels: (found: Array<{file: string; sha256: string | null}>) => {code: string; detail: string} | null;
+  TESSDATA_SOURCE: {repository: string; commit: string; urls: string[]};
   defaultTools: (platform: string, home: string, env: Record<string, string | undefined>) => {pnpm: string; cargo: string};
   missingModelBinaries: (installed: string[], platform: string, arch?: string) => string[];
   pnpmInvocation: (path: string, o: {nodePath: string; exists: (p: string) => boolean; join?: (...p: string[]) => string; dirname?: (p: string) => string}) => {command: string; args: string[]} | null;
@@ -301,6 +302,12 @@ describe("Linux: one target per architecture, the extension in the asar, the mod
     expect(TESSDATA_MODELS).toEqual(pinned);
     for (const arch of ["x64", "arm64"]) expect(targetFor("linux", arch)?.models, arch).toBe(TESSDATA_MODELS);
     expect(targetFor("darwin")?.models).toBeUndefined();
+  });
+
+  it("names where CI fetches the models: one pinned tessdata_best commit, one URL per model file", () => {
+    expect(TESSDATA_SOURCE.repository).toBe("tesseract-ocr/tessdata_best");
+    expect(TESSDATA_SOURCE.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(TESSDATA_SOURCE.urls).toEqual(TESSDATA_MODELS.map((m) => `https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/${TESSDATA_SOURCE.commit}/${m.file}`));
   });
 
   it("checkModels: both files, each with its pinned hash, or a refusal naming the file", () => {
