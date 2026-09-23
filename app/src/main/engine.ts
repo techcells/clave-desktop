@@ -133,6 +133,12 @@ export interface EngineDeps {
   notifyCaptureResumed: () => void;
   /** A browser sign-in, when the build has one; without it `signInWithGoogle` answers OAUTH_BROWSER. */
   googleSignIn?: GoogleSignIn;
+  /**
+   * Data kept outside the engine that "Delete all local data" must also forget (Linux: the
+   * screen-share grant). Awaited once the engine's own writers have stopped and before its files are
+   * removed; a failure there does not stop the rest of the deletion.
+   */
+  alsoDelete?: () => Promise<void>;
 }
 
 export interface Engine {
@@ -814,6 +820,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       // The last event before the files go. `app.log` is the last one deleted, so nothing written
       // here survives, and nothing is written after the folder is empty.
       await log.event("DATA_DELETED");
+      await deps.alsoDelete?.().catch(() => undefined);
       for (const path of deletablePaths(paths)) await fs.remove(path);
       await sentLog.load();
       if (removeModel) await deps.downloader.removeAll();

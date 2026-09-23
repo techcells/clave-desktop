@@ -442,6 +442,27 @@ describe("engine", () => {
     await engine.quit();
   });
 
+  it("delete all local data also deletes what lives outside the engine, before its own files go", async () => {
+    const h = createHarness();
+    const seen: number[] = [];
+    const engine = await ready(h, {alsoDelete: async () => { seen.push(h.fs.files.size); }});
+    await engine.setCapture(true);
+    await engine.deleteAllData({removeModel: false});
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeGreaterThan(0);                 // called while the engine's files were still there
+    expect([...h.fs.files.keys()]).toEqual([]);
+    await engine.quit();
+  });
+
+  it("delete all local data still deletes everything when the outside deletion fails", async () => {
+    const h = createHarness();
+    const engine = await ready(h, {alsoDelete: async () => { throw new Error("disk"); }});
+    await engine.deleteAllData({removeModel: false});
+    expect([...h.fs.files.keys()]).toEqual([]);
+    expect(engine.status().blockers).toContain("SIGNED_OUT");
+    await engine.quit();
+  });
+
   it("shows one user's pending statements to nobody else, and keeps them for that user's own return", async () => {
     const h = createHarness();
     const engine = await ready(h);

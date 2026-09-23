@@ -7,6 +7,7 @@
 
 pub mod bus;
 pub mod capture;
+pub mod chrome;
 pub mod crop;
 pub mod extension;
 pub mod focus;
@@ -106,14 +107,21 @@ pub fn run_event_loop() -> ! {
 
 /// What the rest of the helper is told about a window, given the handle `ids` issues for it.
 pub fn window_info(window: &ExtensionWindow, ids: &mut IdMap) -> WindowInfo {
+    window_info_judged(window, ids, chrome::interface_is_english)
+}
+
+/// [`window_info`], with the question "is the Chrome running as this pid in English?" passed in.
+fn window_info_judged(window: &ExtensionWindow, ids: &mut IdMap, english: impl FnOnce(Option<u32>) -> bool) -> WindowInfo {
+    let bundle_id = window.bundle_id();
+    // Asked on every call rather than remembered, as on Windows: a Chrome restarted in another
+    // language keeps its app id.
+    let band_withheld = chrome::is_chrome(bundle_id.as_deref()) && !english(window.pid);
     WindowInfo {
         window_id: ids.handle(window.mutter_id),
         app: window.app(),
-        bundle_id: window.bundle_id(),
+        bundle_id,
         title: window.title.clone(),
-        // Set for a browser whose private-window badge cannot be read in its interface language,
-        // as on Windows; Linux's rule arrives with Task 6.
-        band_withheld: false,
+        band_withheld,
     }
 }
 
@@ -220,6 +228,33 @@ mod tests {
         assert!(!info.band_withheld);
         assert_eq!(ids.mutter_id(info.window_id), Some(3_566_480_909));
         assert_eq!(window_info(&window, &mut ids).window_id, 1, "the same window, the same handle");
+    }
+
+    #[test]
+    fn only_chrome_is_asked_about_its_language_and_is_withheld_unless_english() {
+        let chrome = |pid: &str| {
+            let json = XTERM
+                .replace(r#""appId":"debian-xterm.desktop""#, r#""appId":"google-chrome.desktop""#)
+                .replace(r#""scale":1}"#, &format!(r#""scale":1,"pid":{pid}}}"#));
+            parse_answer(&json).unwrap().unwrap()
+        };
+        let mut ids = IdMap::new();
+        let asked = std::cell::Cell::new(None);
+        let english = |answer: bool| {
+            let asked = &asked;
+            move |pid: Option<u32>| {
+                asked.set(Some(pid));
+                answer
+            }
+        };
+        assert!(!window_info_judged(&chrome("2143"), &mut ids, english(true)).band_withheld);
+        assert_eq!(asked.take(), Some(Some(2143)), "asked about the window's own process");
+        assert!(window_info_judged(&chrome("2143"), &mut ids, english(false)).band_withheld);
+        assert!(window_info_judged(&chrome("null"), &mut ids, english(false)).band_withheld);
+        assert_eq!(asked.take(), Some(None));
+        let xterm = parse_answer(XTERM).unwrap().unwrap();
+        assert!(!window_info_judged(&xterm, &mut ids, english(false)).band_withheld);
+        assert_eq!(asked.take(), None, "a window that is not Chrome's is never asked about");
     }
 
     #[test]

@@ -55,8 +55,15 @@ describe("the real reader as the app builds it", () => {
     });
     real.reader.grant("t-1");
     void real.reader.permission();
+    await until(() => real.reader.state() === "ready");
+    const window = await real.reader.frontWindow();
+    if (!window) throw new Error("the fake helper always has a front window");
+    expect(grants).toEqual([]);                 // a grant alone starts no session, so no fresh token
+    await real.reader.read({budgetMs: 1500, expect: window});
     await until(() => grants.length > 0);
     expect(grants).toEqual(["t-1-next"]);
+    await real.reader.read({budgetMs: 1500, expect: window});
+    expect(grants).toEqual(["t-1-next"]);       // the session is open: nothing new is spent
     await real.reader.dispose();
   });
 

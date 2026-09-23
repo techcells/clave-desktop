@@ -7,8 +7,9 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import {mayAnswer, parseReaderPath, readerPathFileIsSafe, shapeAnswer} from './logic.js';
+import {mayAnswer, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows} from './logic.js';
 
 const OBJECT_PATH = '/com/clave/Focus';
 const INTERFACE = 'com.clave.Focus';
@@ -43,6 +44,9 @@ function snapshotOf(window) {
             ? {x: monitorRect.x, y: monitorRect.y, width: monitorRect.width, height: monitorRect.height}
             : null,
         scale: monitor >= 0 ? global.display.get_monitor_scale(monitor) : null,
+        // From the client's socket credentials on Wayland, from _NET_WM_PID or XRes on X11; -1 when
+        // unknown, which logic.js turns into null.
+        pid: window.get_pid(),
     };
 }
 
@@ -82,7 +86,8 @@ export default class ClaveFocusExtension extends Extension {
             }
             let answer;
             try {
-                answer = shapeAnswer(snapshotOf(global.display.focus_window));
+                const covered = shellCoversWindows({overviewVisible: Main.overview.visible, modalCount: Main.modalCount});
+                answer = shapeAnswer(covered ? null : snapshotOf(global.display.focus_window));
             } catch {
                 // Never leave the reader waiting out the D-Bus timeout; it treats this as unknown focus.
                 invocation.return_dbus_error(FAILED, 'The focused window could not be described');

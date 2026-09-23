@@ -1057,6 +1057,92 @@ describe("reader client: the screen-share grant (protocol 3)", () => {
     expect(helpers.latest().received).toContainEqual({op: "release"});
   });
 
+  it("a helper started after a release gets the grant and then the release, as the one it replaces had them", async () => {
+    client.grant("t-1");
+    await ready();
+    client.release();
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    client.release();                         // sent while the replacement is still starting: dropped, and not needed
+    helpers.latest().ready();
+    await settle();
+    const handshake = helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release");
+    expect(handshake).toEqual([{op: "grant", token: "t-1"}, {op: "release"}]);
+  });
+
+  it("a grant after a release lifts it: the next helper gets the grant alone", async () => {
+    client.grant("t-1");
+    await ready();
+    client.release();
+    client.grant("t-1");
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release")).toEqual([{op: "grant", token: "t-1"}]);
+  });
+
+  it("a release reaches a ready replacement too, and a token forwarded to it while released is followed by the release", async () => {
+    client.grant("t-1");
+    await ready();
+    const first = helpers.latest();
+    await vi.advanceTimersByTimeAsync(HELPER_PLANNED_RESTART_MS);
+    const held = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});   // keeps the old helper busy, so no swap
+    const replacement = helpers.latest();
+    expect(replacement).not.toBe(first);
+    replacement.ready();
+    await settle();
+    client.release();
+    expect(first.received).toContainEqual({op: "release"});
+    expect(replacement.received).toContainEqual({op: "release"});
+    first.emit({event: "grant", token: "t-2"});
+    await settle();
+    expect(replacement.received.filter((m) => m.op === "grant" || m.op === "release").slice(-2))
+      .toEqual([{op: "grant", token: "t-2"}, {op: "release"}]);
+    first.answerLast({ok: false, reason: "failed"});
+    await held;
+  });
+
+  it("while released, a helper's new token is kept, and the next helper gets it and then the release", async () => {
+    client.grant("t-1");
+    const first = await (async () => { await ready(); return helpers.latest(); })();
+    client.release();
+    first.emit({event: "grant", token: "t-2"});
+    await settle();
+    expect(grants).toEqual(["t-2"]);
+    first.exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release"))
+      .toEqual([{op: "grant", token: "t-2"}, {op: "release"}]);
+  });
+
+  it("forgetting the grant sends the helper holding it away, and the next helper is given nothing", async () => {
+    client.grant("t-1");
+    await ready();
+    client.release();
+    const holder = helpers.latest();
+    client.forgetGrant();
+    expect(holder.received).toContainEqual({op: "shutdown"});
+    const fresh = helpers.latest();
+    expect(fresh).not.toBe(holder);
+    fresh.ready();
+    await settle();
+    expect(fresh.received.filter((m) => m.op === "grant" || m.op === "release")).toEqual([]);
+  });
+
+  it("forgetting the grant with no helper running starts none, and a later helper is given nothing", async () => {
+    client.grant("t-1");
+    client.forgetGrant();
+    expect(helpers.all).toHaveLength(0);
+    await ready();
+    expect(helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release")).toEqual([]);
+  });
+
   it("an observer that throws does not break the client", async () => {
     client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onGrant: () => { throw new Error("boom"); }});
     await ready();

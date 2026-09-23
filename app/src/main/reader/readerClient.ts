@@ -23,8 +23,18 @@ export interface ReaderClient extends Reader {
    * An implausible token is ignored. Other platforms' helpers ignore it.
    */
   grant(token: string): void;
-  /** Protocol 3. Capture was switched off: the ready helper gives up whatever keeps the screen shared. */
+  /**
+   * Protocol 3. Capture was switched off: every ready helper gives up whatever keeps the screen
+   * shared, and opens nothing quietly until the next `grant`. Remembered, so a helper that starts
+   * later is brought to the same state.
+   */
   release(): void;
+  /**
+   * "Delete all local data": the grant is forgotten here, and the helpers that hold it are sent away
+   * (without blame, finishing what they were asked), so no process keeps it and the next helper
+   * starts with none.
+   */
+  forgetGrant(): void;
 }
 
 /** `frontWindow()` rejects with this when there is no helper to ask. See `frontWindow` below for why it must reject. */
@@ -103,9 +113,25 @@ export function createReaderClient(deps: {
 
   /** The newest grant: main's, or a helper's fresher one. Every helper gets it once it is ready. */
   let grantToken: string | null = null;
+  /**
+   * Whether the last word from main was `release` (capture stopped) rather than `grant`. A helper
+   * holds its token through a release and only stops opening sessions quietly, so a helper that
+   * starts, or is handed a fresher token, while this is set is sent the release again after the grant.
+   */
+  let released = false;
 
   function send(helper: Helper, message: ToHelper): void {
     try { helper.link.send(encode(message)); } catch { /* a dead pipe shows up as an exit */ }
+  }
+
+  /** Bring a ready helper to the grant state main last asked for. */
+  function handOver(helper: Helper): void {
+    if (grantToken !== null) send(helper, {op: "grant", token: grantToken});
+    if (released) send(helper, {op: "release"});
+  }
+
+  function readyHelpers(): Helper[] {
+    return [current, replacement].filter((helper): helper is Helper => helper !== null && helper.ready && !helper.gone);
   }
 
   function settleAll(helper: Helper, answer: Answer): void {
@@ -238,7 +264,7 @@ export function createReaderClient(deps: {
       // the spent one and meet a dialog.
       grantToken = message.token;
       for (const other of [current, replacement]) {
-        if (other && other !== helper && other.ready && !other.gone) send(other, {op: "grant", token: message.token});
+        if (other && other !== helper && other.ready && !other.gone) handOver(other);
       }
       try { deps.onGrant?.(message.token); } catch { /* an observer must never break the reader */ }
       return;
@@ -257,7 +283,7 @@ export function createReaderClient(deps: {
       }
       helper.ready = true;
       helper.readyAt = deps.now();
-      if (grantToken !== null) send(helper, {op: "grant", token: grantToken});
+      handOver(helper);
       if (helper.startTimer) { clearTimeout(helper.startTimer); helper.startTimer = null; }
       helper.healthyTimer = setTimeout(() => { backoff = HELPER_BACKOFF_FIRST_MS; }, HELPER_HEALTHY_AFTER_MS);
       tryPromote();
@@ -368,11 +394,20 @@ export function createReaderClient(deps: {
     grant(token: string): void {
       if (!isPlausibleGrantToken(token)) return;
       grantToken = token;
-      if (current?.ready) send(current, {op: "grant", token});
+      released = false;
+      for (const helper of readyHelpers()) handOver(helper);
     },
 
     release(): void {
-      if (current?.ready) send(current, {op: "release"});
+      released = true;
+      for (const helper of readyHelpers()) send(helper, {op: "release"});
+    },
+
+    forgetGrant(): void {
+      grantToken = null;
+      released = false;
+      // The replacement first: draining `current` promotes it, and it may hold the token too.
+      for (const helper of [replacement, current]) if (helper) drain(helper);
     },
 
     state() {

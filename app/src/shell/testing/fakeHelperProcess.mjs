@@ -22,6 +22,9 @@ const approved = (expect) => expect !== null && typeof expect === "object"
 // buffer, seen from the other end of a real pipe. Main must refuse it without holding it.
 let flooded = false;
 
+/** The screen-share grant as the Linux reader keeps it. */
+const grant = {token: null, open: false, released: false};
+
 const lines = createInterface({input: process.stdin});
 lines.on("line", (line) => {
   const message = JSON.parse(line);
@@ -30,13 +33,20 @@ lines.on("line", (line) => {
   if (message.op === "permission") say({id: message.id, permission: "granted"});
   else if (message.op === "frontWindow") say({id: message.id, window: FRONT});
   else if (message.op === "read") {
+    // Protocol 3, as the Linux reader does it: the first read opens a session quietly from the kept
+    // token, which spends it and sends the fresh one; after a `release`, none until the next `grant`.
+    if (grant.token !== null && !grant.open && !grant.released) {
+      grant.open = true;
+      grant.token = `${grant.token}-next`;
+      say({event: "grant", token: grant.token});
+    }
     say({event: "focus"});
     if (!approved(message.expect)) say({id: message.id, ok: false, reason: "windowGone"});
     else say({id: message.id, ok: true, window: FRONT, text: "line one\nlínea dos ✓", stats: {captureMs: 3, cacheHit: false}});
   }
   else if (message.op === "requestPermission") say({id: message.id});
-  // Protocol 3: a grant answered the way a Linux helper does once a session starts with it.
-  else if (message.op === "grant") say({event: "grant", token: `${message.token}-next`});
+  else if (message.op === "grant") { grant.token = message.token; grant.released = false; }
+  else if (message.op === "release") { grant.open = false; grant.released = true; }
 });
 lines.on("close", () => { if (mode !== "stubborn") process.exit(0); });
 if (mode === "stubborn") setInterval(() => undefined, 1000);

@@ -1,12 +1,12 @@
 import {describe, expect, it} from "vitest";
-import {mayAnswer, parseReaderPath, readerPathFileIsSafe, shapeAnswer} from "./logic.js";
+import {mayAnswer, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows} from "./logic.js";
 
 const READER = "/opt/Clave Agent/clave-reader";
 
 const snapshot = (over: Record<string, unknown> = {}) => ({
   id: 42, title: "admin@ubuntu: ~", appName: "Terminal", appId: "org.gnome.Terminal.desktop",
   wmClass: "gnome-terminal-server", x11: false, frame: {x: 66, y: 32, width: 914, height: 577},
-  monitor: 0, monitorFrame: {x: 0, y: 0, width: 1440, height: 900}, scale: 1, ...over
+  monitor: 0, monitorFrame: {x: 0, y: 0, width: 1440, height: 900}, scale: 1, pid: 2143, ...over
 });
 
 describe("parseReaderPath", () => {
@@ -54,8 +54,17 @@ describe("shapeAnswer", () => {
     expect(JSON.parse(shapeAnswer(snapshot()))).toEqual({
       id: 42, title: "admin@ubuntu: ~", appName: "Terminal", appId: "org.gnome.Terminal.desktop",
       wmClass: "gnome-terminal-server", x11: false, frame: [66, 32, 914, 577], monitor: 0,
-      monitorFrame: [0, 0, 1440, 900], scale: 1
+      monitorFrame: [0, 0, 1440, 900], scale: 1, pid: 2143
     });
+  });
+
+  it("carries the owning process only as a positive whole number, else null (the window is still located)", () => {
+    for (const pid of [0, -1, 1.5, "2143", null, undefined, Number.MAX_SAFE_INTEGER + 1, 2 ** 32]) {
+      const answer = JSON.parse(shapeAnswer(snapshot({pid})));
+      expect(answer, String(pid)).not.toBeNull();
+      expect(answer.pid, String(pid)).toBeNull();
+    }
+    expect(JSON.parse(shapeAnswer(snapshot({pid: 1}))).pid).toBe(1);
   });
 
   it("keeps a missing title as an empty string and missing names as null", () => {
@@ -94,6 +103,27 @@ describe("shapeAnswer", () => {
   it("says whether the window is an X11 one only when told so", () => {
     expect(JSON.parse(shapeAnswer(snapshot({x11: true}))).x11).toBe(true);
     expect(JSON.parse(shapeAnswer(snapshot({x11: "yes"}))).x11).toBe(false);
+  });
+});
+
+describe("shellCoversWindows", () => {
+  it("is false only when the overview is hidden and GNOME Shell holds no modal", () => {
+    expect(shellCoversWindows({overviewVisible: false, modalCount: 0})).toBe(false);
+  });
+
+  it("is true with the overview shown, or any modal (a system dialog, a top-bar menu, the window switcher)", () => {
+    expect(shellCoversWindows({overviewVisible: true, modalCount: 0})).toBe(true);
+    expect(shellCoversWindows({overviewVisible: true, modalCount: 1})).toBe(true);
+    expect(shellCoversWindows({overviewVisible: false, modalCount: 1})).toBe(true);
+    expect(shellCoversWindows({overviewVisible: false, modalCount: 3})).toBe(true);
+  });
+
+  it("is true when the shell's state cannot be read, because unknown means do not capture", () => {
+    for (const state of [null, undefined, {}, {overviewVisible: false}, {modalCount: 0},
+      {overviewVisible: "no", modalCount: 0}, {overviewVisible: false, modalCount: -1},
+      {overviewVisible: false, modalCount: 0.5}, {overviewVisible: false, modalCount: "0"}]) {
+      expect(shellCoversWindows(state), JSON.stringify(state)).toBe(true);
+    }
   });
 });
 

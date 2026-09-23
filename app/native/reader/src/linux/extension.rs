@@ -35,6 +35,9 @@ pub struct ExtensionWindow {
     pub monitor: u32,
     pub monitor_frame: Rect,
     pub scale: f64,
+    /// The process that owns the window, when Mutter knows it (and the extension is new enough to
+    /// say). Read only for Chrome's interface language (`super::chrome`).
+    pub pid: Option<u32>,
 }
 
 impl ExtensionWindow {
@@ -123,6 +126,7 @@ pub fn parse_answer(json: &str) -> Result<Option<ExtensionWindow>, ExtensionErro
             monitor: u32::try_from(object.get("monitor")?.as_u64()?).ok()?,
             monitor_frame: rect(object.get("monitorFrame")?)?,
             scale,
+            pid: object.get("pid").and_then(Value::as_u64).filter(|pid| *pid > 0).and_then(|pid| u32::try_from(pid).ok()),
         })
     };
     located().map(Some).ok_or(ExtensionError::Malformed)
@@ -181,6 +185,17 @@ mod tests {
         let window = parse_answer(&bare).unwrap().unwrap();
         assert_eq!(window.app(), "");
         assert_eq!(window.bundle_id(), None);
+    }
+
+    #[test]
+    fn the_owning_process_is_kept_when_it_is_a_positive_u32_and_is_otherwise_unknown() {
+        assert_eq!(parse_answer(&with("pid", "2143")).unwrap().unwrap().pid, Some(2143));
+        assert_eq!(parse_answer(&with("pid", "4294967295")).unwrap().unwrap().pid, Some(u32::MAX));
+        // An unknown pid never costs the window its place: it only means "unknown" where a pid is asked.
+        for value in ["<absent>", "null", "0", "-1", "1.5", r#""2143""#, "4294967296"] {
+            let window = parse_answer(&with("pid", value)).unwrap().unwrap();
+            assert_eq!(window.pid, None, "pid = {value}");
+        }
     }
 
     #[test]

@@ -45,6 +45,24 @@ export function readerPathFileIsSafe(file, uid) {
     && Number.isSafeInteger(file.mode) && (file.mode & 0o022) === 0;
 }
 
+/**
+ * Whether GNOME Shell is drawing something of its own over the windows: the Activities overview,
+ * or anything that holds a modal (a system dialog such as the Share-screen prompt, a top-bar menu,
+ * the Alt+Tab switcher). Mutter's focus stays on the last window meanwhile, so without this the
+ * reader would crop the window's rectangle out of the overview and read another window's thumbnail
+ * under this window's name (L7, 2026-09-23). While it is true `Get()` answers no window. A state
+ * that cannot be read counts as covered: unknown means do not capture.
+ *
+ * @param {unknown} state `{overviewVisible, modalCount}` as read from the shell
+ * @returns {boolean}
+ */
+export function shellCoversWindows(state) {
+  if (state === null || typeof state !== "object") return true;
+  const {overviewVisible, modalCount} = /** @type {{overviewVisible: unknown, modalCount: unknown}} */ (state);
+  if (typeof overviewVisible !== "boolean" || !Number.isSafeInteger(modalCount) || modalCount < 0) return true;
+  return overviewVisible || modalCount > 0;
+}
+
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
 const isCoordinate = (value) => Number.isSafeInteger(value);
 const nameOrNull = (value) => (typeof value === "string" && value.length > 0 ? value : null);
@@ -72,9 +90,13 @@ function rectangle(rect) {
  * missing any of them answers `null`, never a guess: unknown focus or position means the frame is
  * dropped. The names are only descriptive, and a missing one is `null` (the title an empty string).
  *
+ * `pid` is the process that owns the window, or `null` when Mutter does not know it. The reader
+ * reads it only for a browser whose private-window badge is a word, to learn that browser's
+ * interface language from the process's environment; an unknown pid there means "not English".
+ *
  * @param {null | undefined | {
  *   id: unknown, title: unknown, appName: unknown, appId: unknown, wmClass: unknown, x11: unknown,
- *   frame: unknown, monitor: unknown, monitorFrame: unknown, scale: unknown
+ *   frame: unknown, monitor: unknown, monitorFrame: unknown, scale: unknown, pid: unknown
  * }} window
  * @returns {string}
  */
@@ -96,6 +118,7 @@ export function shapeAnswer(window) {
     frame,
     monitor,
     monitorFrame,
-    scale
+    scale,
+    pid: isCount(window.pid) && window.pid > 0 && window.pid <= 0xffffffff ? window.pid : null
   });
 }

@@ -16,7 +16,6 @@ import {createNodeDownloadDisk, createNodeHttp} from "../main/model/nodeDownload
 import {parseTaxonomy, type ClaveApi} from "../main/ports/claveApi";
 import {parseFrontWindow, type Reader} from "../main/ports/reader";
 import {systemLocalTime} from "../main/review/scheduler";
-import {createJsonFile} from "../main/storage/jsonFile";
 import {createNodeFs} from "../main/storage/nodeFs";
 import {dataPaths} from "../main/storage/paths";
 import {COPY} from "../renderer/copy";
@@ -38,9 +37,9 @@ import {openLicences} from "./licences";
 import {background, startFailureCode} from "./lifecycle";
 import {isTranslocatedPath} from "./translocation";
 import {chooseHelperPath, createRealReader} from "./realReader";
-import {createScreenGrant, parseScreenGrant, type ScreenGrant} from "./screenGrant";
+import {createScreenGrant, screenGrantFile, type ScreenGrant} from "./screenGrant";
 import {runSmoke} from "./smoke";
-import {TRAY_HOST_QUERY, closeAction, trayHostFrom} from "./trayHost";
+import {askTrayHost, closeAction} from "./trayHost";
 import {trayKey, trayState} from "./trayState";
 import {samePage} from "./trust";
 
@@ -83,12 +82,6 @@ let tray: Tray | null = null;
 let window: BrowserWindow | null = null;
 let engine: Engine | null = null;
 let quitting = false;
-/**
- * Whether a tray icon can bring a hidden window back. Linux starts from "no" until the session bus
- * says a tray host is there (plain GNOME has none), so a closed window is minimised rather than
- * hidden out of reach; macOS and Windows always have one.
- */
-let hasTray = process.platform !== "linux";
 /**
  * True once `start()` has put the window up. Until then there is no window, no engine and no IPC
  * handler, so a second instance must not be given a page to load: it would come up against nothing
@@ -177,7 +170,16 @@ function showWindow(): void {
     // every attempt to shut it by hiding a window is an app the user cannot get rid of.
     if (!quitting && engine !== null) {
       event.preventDefault();
-      if (closeAction(hasTray) === "hide") window?.hide(); else window?.minimize();
+      // macOS and Windows always have a tray. Linux may not (plain GNOME has none), and with none
+      // the window's close is the only way out: it quits. Asked at every close, so a tray turned on
+      // or off while the app runs is seen.
+      if (process.platform !== "linux") { window?.hide(); return; }
+      void askTrayHost((file, args, options, callback) => {
+        execFile(file, [...args], {timeout: options.timeout}, (error, stdout) => callback(error, String(stdout)));
+      }).then((tray) => {
+        if (closeAction(tray) === "quit") app.quit();
+        else if (window && !window.isDestroyed()) window.hide();
+      });
     }
   });
   // loadURL, not loadFile, so the URL the frame reports is the exact string we compared against.
@@ -246,7 +248,7 @@ async function start(): Promise<void> {
   const real = REAL_READER
     ? createRealReader({
       helperPath: chooseHelperPath([join(dirname(process.execPath), HELPER_NAME), here(`native/${HELPER_NAME}`)], existsSync), exists: existsSync,
-      spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: readerSpawnEnv(process.platform, process.env)}),
+      spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: readerSpawnEnv(process.platform, process.env, path)}),
       now: () => Date.now(),
       onGrant: (token) => { screenGrant?.saveToken(token); }
     })
@@ -255,7 +257,7 @@ async function start(): Promise<void> {
   const cipher = SMOKE ? createSmokeCipher() : createSafeStorageCipher(safeStorage);
   if (real) {
     screenGrant = createScreenGrant({
-      file: createJsonFile({fs: createNodeFs(), path: paths.screenGrant, parse: parseScreenGrant, cipher}),
+      file: screenGrantFile({fs: createNodeFs(), path: paths.screenGrant, cipher}),
       reader: real.reader
     });
     // Read before the engine asks its first question, so a kept grant is already with the reader when
@@ -315,15 +317,12 @@ async function start(): Promise<void> {
     otherSelfNames: app.isPackaged ? [] : ["Electron"],
     notifyReview: (count) => notify(COPY.notify.review(count), {onClick: showWindow}),
     notifyCaptureResumed: () => notify(COPY.notify.resumed, {silent: true}),
-    ...(googleSignIn ? {googleSignIn} : {})
+    ...(googleSignIn ? {googleSignIn} : {}),
+    ...(screenGrant ? {alsoDelete: () => screenGrant.forget()} : {})
   });
   const current = engine;
   real?.attach(current);
-  if (screenGrant) {
-    const grant = screenGrant;
-    teardown.push(current.onStatus((status) => grant.capture(status.capture === "on")));
-    grant.capture(current.status().capture === "on");
-  }
+  if (screenGrant) teardown.push(screenGrant.follow(current));
 
   const router = createIpcRouter({
     engine: current, downloader, reader: translocated ? {requestPermission: async () => undefined} : reader, recentApp: () => recentApp,
@@ -350,9 +349,6 @@ async function start(): Promise<void> {
   tray.setToolTip(APP_NAME);
   // A Windows tray icon is clicked, not opened like a menu-bar item: a left click brings the window up.
   if (process.platform !== "darwin") tray.on("click", showWindow);
-  if (process.platform === "linux") {
-    execFile(TRAY_HOST_QUERY[0], TRAY_HOST_QUERY[1], (error, stdout) => { hasTray = !error && trayHostFrom(stdout); });
-  }
   current.onStatus(refreshTray);
   refreshTray(current.status());
   showWindow();
