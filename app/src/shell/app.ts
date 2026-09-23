@@ -259,7 +259,9 @@ async function start(): Promise<void> {
       spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: readerSpawnEnv(process.platform, process.env, path)}),
       now: () => Date.now(),
       onGrant: (token) => { screenGrant?.saveToken(token); },
-      onExtension: (refused) => { if (gnomeExtension) background(gnomeExtension.readerRefused(refused)); }
+      onExtension: (refused) => { if (gnomeExtension) background(gnomeExtension.readerRefused(refused)); },
+      onShareStopped: () => { if (screenGrant) background(screenGrant.revoke()); },
+      deniedMayBeStale: process.platform !== "linux"
     })
     : null;
   const reader: Reader = real ? real.reader : standInReader();

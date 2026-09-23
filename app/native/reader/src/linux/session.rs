@@ -13,7 +13,8 @@
 //! a switched-off app never ends up sharing (Task 3 review, I2).
 //!
 //! Portal calls, the session thread's start and stop, and the `grant` event all happen with the state
-//! lock released, so `permission` and `frontWindow` on the input thread never wait for them.
+//! lock released, so `permission` and `frontWindow` on the input thread never wait for them. The one
+//! exception is `shareStopped`, a single short line sent while the lock is held (see [`refuse`]).
 
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -80,9 +81,16 @@ fn state() -> MutexGuard<'static, State> {
 /// one when capture is switched on.
 pub fn grant(token: &str) {
     if token_is_plausible(token) {
-        let mut state = state();
+        keep_grant(&mut state(), token);
+    }
+}
+
+/// While refused, the token is not kept: the app may send one that crossed its `shareStopped` on
+/// the way, and the Share button's session would restore with it, no dialog shown.
+fn keep_grant(state: &mut State, token: &str) {
+    state.released = false;
+    if !state.refused {
         state.token = Some(token.to_owned());
-        state.released = false;
     }
 }
 
@@ -129,6 +137,27 @@ impl Open {
     /// user pressed Stop on GNOME's indicator), a stream failed, or the session thread is gone.
     fn ended(&self) -> bool {
         portal::was_closed(&self.path) || self.thread.ended()
+    }
+}
+
+/// Mark the grant refused: no session opens quietly until one starts from the Share dialog, and the
+/// token goes too, because GNOME honours it even after a Stop and the Share button's session
+/// (`open(true)`) would otherwise pass it and restore the share with no dialog. Whether this is
+/// news, which is when the app is told (`shareStopped`), so it drops the token it keeps as well.
+fn mark_refused(state: &mut State) -> bool {
+    let news = !state.refused;
+    state.refused = true;
+    state.token = None;
+    news
+}
+
+/// Refuse, and tell the app the first time. Called WITH the state lock held, so the event is on its
+/// way before anything can read the refusal: `permission` answers `denied` from this state, and the
+/// app may shut a `denied` helper down at once, which would lose an event sent after the session
+/// is stopped (review, I1). Nothing that holds the output while waiting for this lock exists.
+fn refuse(state: &mut State) {
+    if mark_refused(state) {
+        crate::runtime::emit(&crate::protocol::share_stopped_line());
     }
 }
 
@@ -200,7 +229,7 @@ pub fn open(interactive: bool) -> Result<(), CaptureError> {
             outcome
         }
         Err(PortalError::Refused) => {
-            state.refused = true;
+            refuse(&mut state);
             Err(CaptureError::Refused)
         }
         Err(PortalError::Failed | PortalError::Malformed) => Err(CaptureError::Other),
@@ -261,7 +290,7 @@ pub fn housekeeping(locked: bool, now: Instant) {
             Keep::Keep => return,
             Keep::Close => take_open(&mut state),
             Keep::Refuse => {
-                state.refused = true;
+                refuse(&mut state);
                 take_open(&mut state)
             }
         }
@@ -279,7 +308,7 @@ pub fn crop(window: &ExtensionWindow, not_before: Instant) -> Result<Frame, Capt
         let mut state = state();
         let Some(current) = state.open.as_ref() else { return Err(CaptureError::Other) };
         if current.ended() {
-            state.refused = true;
+            refuse(&mut state);
             let open = take_open(&mut state);
             drop(state);
             if let Some(open) = open {
@@ -328,6 +357,40 @@ mod tests {
             assert!(!token_is_plausible(bad), "{bad:?}");
         }
         assert!(!token_is_plausible(&"a".repeat(MAX_TOKEN_CHARS + 1)));
+    }
+
+    fn fresh_state() -> State {
+        State { token: Some("t".to_owned()), open: None, starting: false, generation: 0, last_capture: None, refused: false, released: false }
+    }
+
+    #[test]
+    fn a_refusal_is_news_once_until_a_session_starts_again() {
+        let mut state = fresh_state();
+        assert!(mark_refused(&mut state), "the first refusal is reported");
+        assert!(state.refused);
+        // GNOME honours the token even after a Stop, and the Share button's session (`open(true)`)
+        // passes the kept token: kept, it would restore the share with no dialog (review, I2).
+        assert_eq!(state.token, None, "the token goes with the refusal");
+        state.token = Some("t".to_owned());
+        assert!(!mark_refused(&mut state), "a second one before any new session is not");
+        assert!(state.refused);
+        state.refused = false; // what a session that starts does
+        assert!(mark_refused(&mut state), "a refusal after a new session is reported again");
+    }
+
+    #[test]
+    fn a_grant_that_crosses_a_refusal_keeps_no_token_but_still_ends_a_release() {
+        // The app may send `grant` (capture switched on) before it has heard `shareStopped`: that
+        // token must not come back, or the Share button's session would restore with it.
+        let mut state = fresh_state();
+        mark_refused(&mut state);
+        state.released = true;
+        keep_grant(&mut state, "t-old");
+        assert_eq!(state.token, None);
+        assert!(!state.released);
+        state.refused = false; // a session started from the Share dialog
+        keep_grant(&mut state, "t-new");
+        assert_eq!(state.token.as_deref(), Some("t-new"));
     }
 
     fn window_on(monitor: &str) -> ExtensionWindow {

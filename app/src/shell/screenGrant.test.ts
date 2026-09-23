@@ -1,4 +1,4 @@
-import {describe, expect, it} from "vitest";
+import {describe, expect, it, vi} from "vitest";
 import type {JsonFile} from "../main/storage/jsonFile";
 import {createFakeCipher, createMemFs} from "../main/testing/memFs";
 import {createScreenGrant, parseScreenGrant, screenGrantFile} from "./screenGrant";
@@ -148,6 +148,51 @@ describe("forgetting the screen grant (delete all local data)", () => {
     await expect(grant.forget()).rejects.toThrow("disk");
     grant.capture(true);
     expect(reader.sent).toEqual(["grant t-1", "forget"]);
+  });
+});
+
+describe("the user stopped the screen share (Linux, protocol 5)", () => {
+  it("drops the token here and from the file, after any save still in flight, and grants nothing after", async () => {
+    const reader = recordingReader();
+    const file = memoryFile({token: "t-1"});
+    let finishSave: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { finishSave = resolve; });
+    const save = file.save.bind(file);
+    file.save = async (next) => { await gate; await save(next); };
+    const grant = createScreenGrant({file, reader});
+    await grant.load();
+    grant.saveToken("t-2");                     // held on the disk
+    const revoking = grant.revoke();
+    finishSave();
+    await revoking;
+    expect(await file.load()).toBeNull();
+    grant.capture(true);
+    // The reader client dropped the token itself when it heard the stop: nothing to tell it here.
+    expect(reader.sent).toEqual(["grant t-1"]);
+  });
+
+  it("keeps the token of a share the user starts again", async () => {
+    const reader = recordingReader();
+    const file = memoryFile({token: "t-1"});
+    const grant = createScreenGrant({file, reader});
+    await grant.load();
+    await grant.revoke();
+    grant.saveToken("t-2");
+    grant.capture(true);
+    await Promise.resolve();
+    expect(reader.sent).toEqual(["grant t-1", "grant t-2"]);
+    await vi.waitFor(async () => expect(await file.load()).toEqual({token: "t-2"}));
+  });
+
+  it("still drops the token here when the file cannot be removed", async () => {
+    const reader = recordingReader();
+    const file = memoryFile({token: "t-1"});
+    file.remove = async () => { throw new Error("disk"); };
+    const grant = createScreenGrant({file, reader});
+    await grant.load();
+    await expect(grant.revoke()).rejects.toThrow("disk");
+    grant.capture(true);
+    expect(reader.sent).toEqual(["grant t-1"]);
   });
 });
 

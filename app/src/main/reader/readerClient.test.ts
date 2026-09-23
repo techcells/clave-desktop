@@ -727,6 +727,24 @@ describe("reader client: calls", () => {
       helpers.latest().answerLast({permission: "denied"});
       expect(await again).toBe("denied");
     });
+
+    it("on Linux a `denied` is never stale: the helper showing GNOME's Share dialog is kept, however long it takes", async () => {
+      // Live finding, 2026-09-23: the Share dialog closed itself about 3 s in. The helper showing it
+      // answered `denied` while the user chose, the refresh sent it away, and its exit closed the
+      // dialog (and crashed GNOME's portal in the VM). The Linux helper's `denied` is its own live
+      // state: a fresh helper knows less, not more.
+      client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), deniedMayBeStale: false});
+      await readyIdle();
+      const asked = client.requestPermission();     // the helper opens the dialog on its own thread and answers at once
+      helpers.latest().answerLast({});
+      await asked;
+      for (let second = 0; second < 120; second += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(await denied()).toBe("denied");
+      }
+      expect(helpers.all).toHaveLength(1);
+      expect(helpers.all[0]?.received.some((m) => m.op === "shutdown")).toBe(false);
+    });
   });
 
   describe("focus", () => {
@@ -1167,6 +1185,130 @@ describe("reader client: the screen-share grant (protocol 3)", () => {
     fresh.ready();
     await settle();
     expect(fresh.received).toContainEqual({op: "grant", token: "t-1"});
+  });
+
+  it("a stopped share (protocol 5): the helper that replaces a `denied` one is given no token at all", async () => {
+    // The live finding of 2026-09-23: the user pressed Stop on GNOME's indicator, the helper answered
+    // `denied`, the denied refresh replaced it, and the replacement, handed the kept token, reopened
+    // the share with no dialog about 10 s later.
+    let stopped = 0;
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onShareStopped: () => { stopped += 1; }});
+    client.grant("t-1");
+    await ready();
+    const stopper = helpers.latest();
+    stopper.emit({event: "shareStopped"});
+    await settle();
+    expect(stopped).toBe(1);
+    await vi.advanceTimersByTimeAsync(CLIENT_DENIED_REFRESH_MS);
+    const permission = client.permission();
+    stopper.answerLast({permission: "denied"});
+    await expect(permission).resolves.toBe("denied");
+    expect(stopper.received).toContainEqual({op: "shutdown"});
+    const fresh = helpers.latest();
+    expect(fresh).not.toBe(stopper);
+    fresh.ready();
+    await settle();
+    expect(fresh.received.filter((m) => m.op === "grant")).toEqual([]);
+  });
+
+  it("a stopped share sends away a ready replacement that already holds the token, and not the helper that stopped", async () => {
+    client.grant("t-1");
+    await ready();
+    const first = helpers.latest();
+    await vi.advanceTimersByTimeAsync(HELPER_PLANNED_RESTART_MS);
+    const held = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});   // keeps the old helper busy, so no swap
+    const replacement = helpers.latest();
+    expect(replacement).not.toBe(first);
+    replacement.ready();
+    await settle();
+    expect(replacement.received).toContainEqual({op: "grant", token: "t-1"});
+    first.emit({event: "shareStopped"});
+    await settle();
+    expect(replacement.received).toContainEqual({op: "shutdown"});
+    expect(first.received.some((m) => m.op === "shutdown")).toBe(false);
+    first.answerLast({ok: false, reason: "failed"});
+    await held;
+  });
+
+  it("a stopped share from a helper on its way out releases and sends away the current one, even mid-read", async () => {
+    // A restart (the extension's refusal, Task 7) leaves the old helper finishing a read while the
+    // new one already holds the token. The old one reports the Stop: the new one must neither open a
+    // session quietly with the read it has in flight nor stay in service with the token.
+    client.grant("t-1");
+    await ready();
+    const old = helpers.latest();
+    const oldRead = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});
+    client.restart();
+    const fresh = helpers.latest();
+    expect(fresh).not.toBe(old);
+    fresh.ready();
+    await settle();
+    expect(fresh.received).toContainEqual({op: "grant", token: "t-1"});
+    const freshRead = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});
+    await settle();
+    old.emit({event: "shareStopped"});
+    await settle();
+    const after = fresh.received.slice(fresh.received.findIndex((m) => m.op === "read"));
+    expect(after).toContainEqual({op: "release"});
+    old.answerLast({ok: false, reason: "failed"});
+    fresh.answerLast({ok: false, reason: "failed"});
+    await Promise.allSettled([oldRead, freshRead]);
+    await settle();
+    expect(fresh.received).toContainEqual({op: "shutdown"});
+    const next = helpers.latest();
+    expect(next).not.toBe(fresh);
+    next.ready();
+    await settle();
+    expect(next.received.filter((m) => m.op === "grant")).toEqual([]);
+  });
+
+  it("a stopped share releases a helper that is only finishing a read, so that read opens nothing", async () => {
+    client.grant("t-1");
+    await ready();
+    const old = helpers.latest();
+    const oldRead = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});
+    client.restart();                            // `old` now drains: its read is still in flight
+    const fresh = helpers.latest();
+    fresh.ready();
+    await settle();
+    fresh.emit({event: "shareStopped"});
+    await settle();
+    expect(old.received).toContainEqual({op: "release"});
+    expect(fresh.received.some((m) => m.op === "shutdown")).toBe(false);
+    old.answerLast({ok: false, reason: "failed"});
+    await oldRead.catch(() => undefined);
+  });
+
+  it("after a stopped share, a token from a share the user started again is kept and handed on", async () => {
+    client.grant("t-1");
+    await ready();
+    helpers.latest().emit({event: "shareStopped"});
+    helpers.latest().emit({event: "grant", token: "t-2"});    // the Share dialog, pressed again
+    await settle();
+    expect(grants).toEqual(["t-2"]);
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received.filter((m) => m.op === "grant")).toEqual([{op: "grant", token: "t-2"}]);
+  });
+
+  it("a shareStopped observer that throws breaks nothing, and the token is still dropped", async () => {
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onShareStopped: () => { throw new Error("boom"); }});
+    client.grant("t-1");
+    await ready();
+    helpers.latest().emit({event: "shareStopped"});
+    await settle();
+    const permission = client.permission();
+    helpers.latest().answerLast({permission: "denied"});
+    await expect(permission).resolves.toBe("denied");
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received.filter((m) => m.op === "grant")).toEqual([]);
   });
 
   it("an observer that throws does not break the client", async () => {

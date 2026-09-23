@@ -44,6 +44,12 @@
 //! sent by the Linux helper when the GNOME extension starts or stops refusing it, so the app can
 //! restart the helper or ask for a new login instead of reading nothing with no blocker shown. The
 //! number moved for the same reason as 3's. macOS and Windows helpers never send it.
+//!
+//! What 5 added over 4 (the Linux plan, Task 8's live finding): the `shareStopped` event, sent by the
+//! Linux helper when the screen share ends without it asking (the user pressed Stop on GNOME's
+//! indicator, or refused the Share dialog), once per refusal. GNOME still honours the restore token
+//! after a Stop, so the app must drop the one it keeps, or any new helper handed it reopens the share
+//! with no dialog. The number moved for the same reason as 3's. macOS and Windows helpers never send it.
 
 use serde_json::{Value, json};
 
@@ -51,7 +57,7 @@ use crate::platform::WindowInfo;
 use crate::scheduler::{FailDetail, FailReason, LineBox, ReadAnswer, ReadGeometry, ReadStats};
 
 /// The protocol version announced in the `ready` event.
-pub const PROTOCOL_VERSION: u64 = 4;
+pub const PROTOCOL_VERSION: u64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {
@@ -191,6 +197,12 @@ pub fn grant_line(token: &str) -> String {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn extension_line(refused: bool) -> String {
     json!({"event": "extension", "refused": refused}).to_string()
+}
+
+/// Protocol 5: the screen share ended without the helper asking (Linux). Nothing else is in it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn share_stopped_line() -> String {
+    json!({"event": "shareStopped"}).to_string()
 }
 
 pub fn focus_line() -> String {
@@ -614,10 +626,11 @@ mod tests {
 
     #[test]
     fn the_ready_event_announces_the_protocol() {
-        // 4, not 3 (and 3 was not 2). An app must be able to tell a helper that speaks what it
+        // 5, not 4 (and 4 was not 3). An app must be able to tell a helper that speaks what it
         // speaks from one that does not — the approved window since 2, the screen-share grant since
-        // 3, the extension event since 4 — and this line is the only place it can.
-        assert_eq!(ready_line(), r#"{"event":"ready","protocol":4}"#);
+        // 3, the extension event since 4, the shareStopped event since 5 — and this line is the only
+        // place it can.
+        assert_eq!(ready_line(), r#"{"event":"ready","protocol":5}"#);
     }
 
     #[test]
@@ -665,6 +678,11 @@ mod tests {
     fn an_extension_event_says_refused_or_not_and_nothing_else() {
         assert_eq!(extension_line(true), r#"{"event":"extension","refused":true}"#);
         assert_eq!(extension_line(false), r#"{"event":"extension","refused":false}"#);
+    }
+
+    #[test]
+    fn the_share_stopped_event_carries_nothing_else() {
+        assert_eq!(share_stopped_line(), r#"{"event":"shareStopped"}"#);
     }
 
     #[test]

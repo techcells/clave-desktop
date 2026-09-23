@@ -26,6 +26,12 @@ export type FromHelper =
   | {kind: "grant"; token: string | null}
   /** Protocol 4 (Linux): whether the GNOME extension refuses this helper; sent only when that changes. */
   | {kind: "extension"; refused: boolean}
+  /**
+   * Protocol 5 (Linux): the screen share ended without the helper asking (the user pressed Stop on
+   * GNOME's sharing indicator, or refused the Share dialog). The kept grant must go: GNOME still
+   * honours it after a Stop, so any helper handed it would reopen the share with no dialog.
+   */
+  | {kind: "shareStopped"}
   /** `body` is everything the helper sent except `id`. It is NOT validated here: the caller knows which call it answers. */
   | {kind: "answer"; id: number; body: Record<string, unknown>};
 
@@ -91,6 +97,7 @@ export function parseLine(line: string): FromHelper | null {
     if (record.event === "focus") return {kind: "focus"};
     if (record.event === "grant") return {kind: "grant", token: isPlausibleGrantToken(record.token) ? record.token : null};
     if (record.event === "extension" && typeof record.refused === "boolean") return {kind: "extension", refused: record.refused};
+    if (record.event === "shareStopped") return {kind: "shareStopped"};
     if (record.event === "ready" && Number.isSafeInteger(record.protocol)) return {kind: "ready", protocol: record.protocol as number};
     return null;
   }

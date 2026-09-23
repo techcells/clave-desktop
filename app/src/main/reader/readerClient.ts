@@ -80,6 +80,16 @@ export function createReaderClient(deps: {
   onGrant?: (token: string) => void;
   /** Protocol 4 (Linux): the GNOME extension started (`true`) or stopped (`false`) refusing a helper. */
   onExtension?: (refused: boolean) => void;
+  /** Protocol 5 (Linux): the user stopped the screen share; main forgets the grant it keeps. */
+  onShareStopped?: () => void;
+  /**
+   * Whether a helper's `denied` can be stale, so that a fresh helper is worth trying (the refresh
+   * below). True on macOS, where the system check is cached for the life of the process, and the
+   * default. False on Linux: there `denied` is the helper's own live state (no grant, or the user
+   * stopped the share), a fresh helper knows less, not more, and replacing the helper that is
+   * showing GNOME's Share dialog closes the dialog under the user (live finding, 2026-09-23).
+   */
+  deniedMayBeStale?: boolean;
 }): ReaderClient {
   let current: Helper | null = null;
   /** A planned restart in progress: the next helper, warming up while `current` still serves. */
@@ -103,6 +113,7 @@ export function createReaderClient(deps: {
   let cureTried = false;
   /** How old a helper must be before a `denied` answer replaces it. Doubles while the answer stays `denied`. */
   let deniedRefreshMs = CLIENT_DENIED_REFRESH_MS;
+  const deniedMayBeStale = deps.deniedMayBeStale ?? true;
   /** Helpers that have been asked to go but have not gone yet. `dispose` owns them too. */
   const retiring = new Set<Helper>();
   /** Helpers taken out of service that are still answering calls made before that. `dispose` owns them too. */
@@ -266,6 +277,22 @@ export function createReaderClient(deps: {
     if (message.kind === "focus") { if (helper === current && helper.ready) notifyFocus(); return; }
     if (message.kind === "extension") {
       try { deps.onExtension?.(message.refused); } catch { /* an observer must never break the reader */ }
+      return;
+    }
+    if (message.kind === "shareStopped") {
+      // The user ended the share. The token is dropped here, so no helper started from now on (the
+      // denied refresh's replacement, a restart after a crash) is handed it, and any OTHER live
+      // helper that already holds it is sent away: GNOME honours the token after a Stop, so either
+      // would reopen the share with no dialog (live finding, 2026-09-23). The helper that sent this
+      // drops it too and is refused until a session starts from the Share dialog, so it stays. A
+      // helper still finishing a read (draining) is sent `release` as well: a released helper opens
+      // no session quietly, so the read it has in flight cannot reopen the share either.
+      grantToken = null;
+      for (const other of [replacement, current, ...draining]) {
+        if (other && other !== helper && !other.gone && !other.retired && other.ready) send(other, {op: "release"});
+      }
+      for (const other of [replacement, current]) if (other && other !== helper && !other.gone) drain(other);
+      try { deps.onShareStopped?.(); } catch { /* an observer must never break the reader */ }
       return;
     }
     if (message.kind === "grant") {
@@ -456,7 +483,7 @@ export function createReaderClient(deps: {
         // together must cost ONE replacement and ONE doubling: `drain` refuses the second by itself,
         // but the wait is doubled here, so it needs the same condition or one replacement is charged
         // twice over.
-        if (!gaveUp && !helper.retired && !helper.gone && deps.now() - helper.readyAt >= deniedRefreshMs) {
+        if (deniedMayBeStale && !gaveUp && !helper.retired && !helper.gone && deps.now() - helper.readyAt >= deniedRefreshMs) {
           deniedRefreshMs = Math.min(deniedRefreshMs * 2, CLIENT_DENIED_REFRESH_MAX_MS);
           drain(helper);
         }

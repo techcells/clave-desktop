@@ -92,4 +92,9 @@ describe("reader protocol 3: the screen-share grant", () => {
       expect(parseLine(bad), bad).toBeNull();
     }
   });
+
+  it("reads protocol 5's shareStopped event: the user ended the screen share (Linux)", () => {
+    expect(parseLine('{"event":"shareStopped"}')).toEqual({kind: "shareStopped"});
+    expect(parseLine('{"event":"sharestopped"}')).toBeNull();
+  });
 });

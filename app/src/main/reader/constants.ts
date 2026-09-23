@@ -12,7 +12,7 @@
  * this number is the only thing it can refuse on. That this is not theoretical was measured: the
  * development bundle ran for most of a day with a helper older than the app beside it.
  */
-export const READER_PROTOCOL = 4;
+export const READER_PROTOCOL = 5;
 
 /**
  * 3 added the screen-share grant (the Linux plan, Task 3): main sends `grant` with the token it

@@ -1,6 +1,7 @@
 // A scripted stand-in for the native reader helper, as a REAL child process, for readerLink.test.ts.
 // argv[2]: "normal" (default) | "stubborn" (ignores its input being closed) | "noisy" (also writes to
-// stderr) | "overlong" (answers its first call with one line past main's cap, then behaves)
+// stderr) | "overlong" (answers its first call with one line past main's cap, then behaves) | "stops"
+// (the user stops the screen share at the first read: protocol 5's shareStopped, no session)
 import {writeSync} from "node:fs";
 import {createInterface} from "node:readline";
 
@@ -9,7 +10,7 @@ const say = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 // A blocking write straight to fd 2, as a native helper would do it: if the parent does not drain
 // stderr, this never returns and `ready` is never sent.
 if (mode === "noisy") writeSync(2, "STDERR-NOISE-MUST-BE-IGNORED\n".repeat(20000));
-say({event: "ready", protocol: 4});
+say({event: "ready", protocol: 5});
 
 // The one window this stand-in ever has in front. Protocol 2: a read says which window main
 // approved, and anything else is refused without a capture — so this fake refuses too, which is how
@@ -35,7 +36,10 @@ lines.on("line", (line) => {
   else if (message.op === "read") {
     // Protocol 3, as the Linux reader does it: the first read opens a session quietly from the kept
     // token, which spends it and sends the fresh one; after a `release`, none until the next `grant`.
-    if (grant.token !== null && !grant.open && !grant.released) {
+    if (mode === "stops" && grant.token !== null) {
+      grant.token = null;
+      say({event: "shareStopped"});
+    } else if (grant.token !== null && !grant.open && !grant.released) {
       grant.open = true;
       grant.token = `${grant.token}-next`;
       say({event: "grant", token: grant.token});

@@ -27,6 +27,12 @@ export interface ScreenGrant {
    * removed once any save still in flight has landed, so that save cannot write it back.
    */
   forget(): Promise<void>;
+  /**
+   * Linux: the user stopped the screen share. The kept token is dropped here and its file removed
+   * once any save still in flight has landed, so no later launch or helper reopens the share without
+   * the Share dialog. The reader client has already dropped its copy; nothing is sent to it.
+   */
+  revoke(): Promise<void>;
 }
 
 export function parseScreenGrant(value: unknown): {token: string} | null {
@@ -80,6 +86,11 @@ export function createScreenGrant(deps: {
       const stop = engine.onStatus((status) => grant.capture(status.capture === "on"));
       grant.capture(engine.status().capture === "on");
       return stop;
+    },
+    async revoke() {
+      token = null;
+      await saving;
+      await deps.file.remove();
     },
     async forget() {
       token = null;
