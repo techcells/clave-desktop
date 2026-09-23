@@ -57,6 +57,26 @@ describe("before capture", () => {
     expect(x.after(chrome, undefined)).toBe("unknownWindow");
   });
 
+  it("reads Chrome and Firefox on Linux under the app ids their bands were measured for, and no others", () => {
+    const x = createExclusions({exclusions: [], excludedSites: []});
+    expect(x.before({app: "Google Chrome", bundleId: "google-chrome.desktop", title: "Docs - Google Chrome"})).toBeNull();
+    expect(x.before({app: "Firefox", bundleId: "firefox_firefox.desktop", title: "Docs — Mozilla Firefox"})).toBeNull();
+    // The other channels and packagings were not measured: refused before anything is captured.
+    expect(x.before({app: "Google Chrome", bundleId: "google-chrome-beta.desktop", title: "Docs"})).toBe("excludedApp");
+    expect(x.before({app: "Firefox", bundleId: "firefox.desktop", title: "Docs — Mozilla Firefox"})).toBe("excludedApp");
+    expect(x.before({app: "Firefox", title: "Docs — Mozilla Firefox"})).toBe("excludedApp");
+    expect(x.before({app: "Chromium", bundleId: "chromium_chromium.desktop", title: "Docs"})).toBe("excludedApp");
+    // Chrome's incognito badge sits in the address row on Linux too (L7).
+    const chrome = {app: "Google Chrome", bundleId: "google-chrome.desktop", title: "ClaveProbePage - Google Chrome"};
+    expect(x.after(chrome, "docs.example.com/guide")).toBeNull();
+    expect(x.after(chrome, "docs.example.com/guide Incognito")).toBe("privateWindow");
+    // A Firefox private window: its English title is caught here too, and in any language the reader
+    // already withholds a title that is not a normal window's.
+    const firefox = {app: "Firefox", bundleId: "firefox_firefox.desktop", title: "Docs — Mozilla Firefox Private Browsing"};
+    expect(x.before(firefox)).toBe("privateWindow");
+    expect(x.before({...firefox, title: "Docs — Приватный просмотр Mozilla Firefox", bandWithheld: true})).toBe("excludedApp");
+  });
+
   it("denies every name in a selfApp list, such as an unpackaged run's \"Electron\", and only those", () => {
     const x = createExclusions({exclusions: [], excludedSites: [], selfApp: ["Clave Agent Dev", "Electron", 7]});
     expect(x.before({app: "Clave Agent Dev", title: "Review"})).toBe("excludedApp");
@@ -70,6 +90,18 @@ describe("before capture", () => {
     for (const app of ["Telegram", "WhatsApp", "Messages", "Signal", "1Password", "Bitwarden", "Keychain Access"]) {
       expect(x.before({app, title: "Main"})).toBe("excludedApp");
     }
+  });
+
+  it("excludes GNOME's password store by the name the Linux reader reports (L7)", () => {
+    const x = defaults();
+    expect(x.before({app: "Passwords and Keys", bundleId: "org.gnome.seahorse.Application.desktop", title: "Login"})).toBe("excludedApp");
+    // Its own entry: it holds even when the user removes macOS's "Passwords" from the list.
+    const withoutMacPasswords = createExclusions({
+      exclusions: DEFAULT_EXCLUSIONS.filter((rule) => rule !== "Passwords::"), excludedSites: DEFAULT_EXCLUDED_SITES
+    });
+    expect(withoutMacPasswords.before({app: "Passwords and Keys", title: "Login"})).toBe("excludedApp");
+    // Not a word match: other apps whose names share words are read.
+    expect(x.before({app: "Keys", title: "Main"})).toBeNull();
   });
 
   // The names are what the Windows reader reports: each program's own description, measured on Windows 11.

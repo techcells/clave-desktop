@@ -9,7 +9,13 @@ export const IDLE_AFTER_SECONDS = 60;
 /** No input for this long means the user has left: no reads at all, so the core sees no activity and closes the scenario. */
 export const AWAY_AFTER_SECONDS = 5 * 60;
 export const READ_BUDGET_MS = 1_500;
-/** A `frontWindow()`/`read()` call that never settles must not hang the loop forever. `read` gets this on top of `READ_BUDGET_MS`. */
+/**
+ * Linux reads with Tesseract, slower than Vision or Windows.Media.Ocr: measured in the arm64 VM with the fast
+ * Portuguese model, 95% of live reads finished within 1.4 s and some ran to 1.5 s, which the shared budget turns
+ * into faults (5 in 10 minutes switch reading off). Owner decision, 2026-09-24 (Linux plan, Task 11).
+ */
+export const READ_BUDGET_MS_LINUX = 2_500;
+/** A `frontWindow()`/`read()` call that never settles must not hang the loop forever. `read` gets this on top of its read budget (`READ_BUDGET_MS`, or `READ_BUDGET_MS_LINUX` on Linux). */
 export const READER_CALL_TIMEOUT_MS = 5_000;
 export const PIPELINE_TICK_MS = 10_000;
 export const QUIT_DRAIN_MS = 5_000;

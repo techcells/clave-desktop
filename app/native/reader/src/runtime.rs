@@ -12,6 +12,9 @@ pub const EXIT_PANIC: i32 = 70;
 /// stdin could not be read. Not "the app closed it" — that is an ordinary exit 0 — but a real
 /// I/O failure on the pipe.
 pub const EXIT_STDIN: i32 = 71;
+/// Linux: the helper could not restart itself with `OMP_THREAD_LIMIT=1` (see `linux::prologue`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const EXIT_ENV: i32 = 72;
 
 /// Replace the default panic hook with one that says nothing.
 ///
@@ -30,14 +33,42 @@ pub fn install_silent_panic_hook() {
 pub fn emit(line: &str) {
     let mut out = std::io::stdout().lock();
     if writeln!(out, "{line}").is_err() || out.flush().is_err() {
-        std::process::exit(0);
+        leave(0);
     }
+}
+
+/// Print a fixed code on stderr and carry on: for a condition worth recording that is not fatal,
+/// such as a session bus that cannot be reached yet. Same rule as [`die`]: a code, nothing else.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn note(code: &str) {
+    let _ = writeln!(std::io::stderr(), "{code}");
 }
 
 /// Print a fixed code on stderr and leave.
 pub fn die(code: &str, status: i32) -> ! {
     // Ignore the result: if stderr is gone too there is nothing else to try.
     let _ = writeln!(std::io::stderr(), "{code}");
+    leave(status);
+}
+
+/// End the process with `status`, after flushing what was written.
+///
+/// On Linux without running the C libraries' global destructors (`_exit`): Tesseract's model cache
+/// lives in a static that is never freed, and tearing it down while the worker may still be inside
+/// a recognition could crash the helper on its way out (Task 4 review). Everything the helper
+/// promised is on stdout already, and nothing else needs to be closed. Elsewhere, `process::exit`.
+pub fn leave(status: i32) -> ! {
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    #[cfg(target_os = "linux")]
+    {
+        unsafe extern "C" {
+            fn _exit(status: std::ffi::c_int) -> !;
+        }
+        // SAFETY: `_exit` takes a status and does not return.
+        unsafe { _exit(status) }
+    }
+    #[cfg(not(target_os = "linux"))]
     std::process::exit(status);
 }
 

@@ -47,6 +47,44 @@ describe("the real reader as the app builds it", () => {
     await real.reader.dispose();
   });
 
+  it("passes the helper's fresh screen-share grants to onGrant", async () => {
+    const grants: string[] = [];
+    const real = createRealReader({
+      helperPath: "/app/dist/native/clave-reader", exists: () => true, spawnChild: () => asHelper(), now: () => Date.now(),
+      onGrant: (token) => { grants.push(token); }
+    });
+    real.reader.grant("t-1");
+    void real.reader.permission();
+    await until(() => real.reader.state() === "ready");
+    const window = await real.reader.frontWindow();
+    if (!window) throw new Error("the fake helper always has a front window");
+    expect(grants).toEqual([]);                 // a grant alone starts no session, so no fresh token
+    await real.reader.read({budgetMs: 1500, expect: window});
+    await until(() => grants.length > 0);
+    expect(grants).toEqual(["t-1-next"]);
+    await real.reader.read({budgetMs: 1500, expect: window});
+    expect(grants).toEqual(["t-1-next"]);       // the session is open: nothing new is spent
+    await real.reader.dispose();
+  });
+
+  it("tells onShareStopped when the user ends the screen share (protocol 5)", async () => {
+    let stopped = 0;
+    const real = createRealReader({
+      helperPath: "/app/dist/native/clave-reader", exists: () => true, now: () => Date.now(),
+      spawnChild: () => spawn(process.execPath, [SCRIPT, "stops"], {stdio: ["pipe", "pipe", "pipe"]}),
+      onShareStopped: () => { stopped += 1; }
+    });
+    real.reader.grant("t-1");
+    void real.reader.permission();
+    await until(() => real.reader.state() === "ready");
+    const window = await real.reader.frontWindow();
+    if (!window) throw new Error("the fake helper always has a front window");
+    await real.reader.read({budgetMs: 1500, expect: window});
+    await until(() => stopped > 0);
+    expect(stopped).toBe(1);
+    await real.reader.dispose();
+  });
+
   it("keeps the events that happen before the engine exists and hands them over in order, then passes later ones straight on", async () => {
     const real = createRealReader({
       helperPath: "/nonexistent/clave-reader", exists: () => true,

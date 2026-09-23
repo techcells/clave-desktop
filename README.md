@@ -28,16 +28,23 @@ The app works with Wi-Fi off; only the statements you approve ever leave.
 
 - macOS 14 or later, with Screen Recording permission, asked for on first run
 - Or Windows 10 version 1903 or later (Windows 11 recommended), 64-bit Intel or AMD, which needs no
-  permission. Linux is planned.
+  permission. The Windows installer is not code-signed yet.
+- Or Linux with GNOME 46, on Wayland or Xorg (tested on Ubuntu 24.04), installed from a .deb (Ubuntu) or
+  an .rpm (Fedora). The app installs a small GNOME extension for your account (it takes effect after you
+  log out and back in), and GNOME asks once which screen to share. Other desktops (KDE and others) are
+  not supported yet.
 - About 3 GB of disk for the model, downloaded once during set-up
 - A computer fast enough to run the model. During set-up the app times the model on your machine and
   allows it up to four times the normal time limits; a slower machine is told so, and reading
   stays off. A laptop with only integrated graphics may not pass.
 - For development: Node.js, pnpm, and a Rust toolchain for the native reader; on Windows, also the
-  Visual Studio Build Tools with the C++ workload and a Windows SDK
+  Visual Studio Build Tools with the C++ workload and a Windows SDK; on Linux, also clang, pkg-config,
+  the PipeWire development files, the Tesseract 5 library, and Tesseract's fast Portuguese model
+  (`por.traineddata` from `tessdata_fast`; point `CLAVE_TESSDATA` at its folder)
 
 The reader uses each system's own parts: ScreenCaptureKit and Vision on macOS, Windows.Graphics.Capture
-and Windows.Media.Ocr on Windows. On Windows the recogniser reads the languages whose Windows language
+and Windows.Media.Ocr on Windows, and on Linux GNOME's screen sharing (through PipeWire) with Tesseract,
+reading English and Portuguese. On Windows the recogniser reads the languages whose Windows language
 pack is installed, English first.
 
 ## Installing on Windows
@@ -59,20 +66,24 @@ All commands run from the repository root.
 ```bash
 pnpm --dir app install
 pnpm --dir app build:native      # builds the Rust reader helper
-pnpm --dir app start             # builds the app and starts it with the real model
+pnpm --dir app start             # builds the app and starts it with the real model, and stand-ins
+                                 # for the Clave backend and the screen reader
 ```
 
 Useful variants:
 
 ```bash
 pnpm --dir app start:scripted    # scripted fake model, no download, for UI work
+pnpm --dir app start:api         # the real Clave backend (its development deployment), scripted model
 pnpm --dir app test              # unit and pipeline tests
 pnpm --dir app typecheck
 pnpm --dir app test:native       # Rust tests
 pnpm --dir app smoke             # end-to-end smoke run, prints SMOKE OK
 ```
 
-To build an installer, run the packaging stages in order (`--flavour internal` or `release`):
+Packaged builds (the `package:*` scripts, or the release workflow in `.github/workflows/release.yml`)
+use the real reader, the real model and the production backend. To build an installer, run the
+packaging stages in order (`--flavour internal` or `release`):
 
 ```bash
 pnpm --dir app package:stage -- --flavour internal
@@ -83,7 +94,9 @@ pnpm --dir app package:artefacts -- --flavour internal
 
 On Windows this also needs Inno Setup 6. The VC++ runtime DLLs shipped beside the model's native
 add-on are copied from the Visual Studio installation. Release-flavour Windows artefacts are refused
-until Windows signing is set up.
+until Windows signing is set up. On Linux it makes a .deb and an .rpm and needs nfpm 2.47.0, with
+`CLAVE_TESSDATA` pointing at the recognition model's folder for the stage step; Linux builds are not
+signed, and the published SHA256SUMS are the integrity check.
 
 ## Repository layout
 
@@ -94,14 +107,18 @@ until Windows signing is set up.
 | `app/src/shell`, `app/src/renderer` | Electron entry points, preload and the React UI |
 | `app/src/eval`, `app/src/readerEval` | Release gate for the real model and the reader eval harness |
 | `app/native/reader` | Rust helper that captures the focused window and recognises text, talking JSON lines over stdio |
-| `app/scripts` | Build, native build, dev bundle, packaging and reader eval scripts |
+| `app/linux/gnome-extension` | The GNOME Shell extension the Linux app installs, which tells the reader which window is in front |
+| `app/scripts` | Build, native build, packaging (stage, bundle, sign, artefacts), dev bundle and reader eval scripts |
 | `eval/` | Synthetic fixtures for the extraction pipeline; never real screen text |
-| `docs/` | The what-leaves page and the Windows to-do list (plans, specs and review records are kept internally) |
+| `docs/` | The what-leaves page and the Windows and Linux to-do lists (plans, specs and review records are kept internally) |
 
 ## Status
 
-Early, pre-release. The core pipeline, desktop shell, and the macOS and Windows readers are built and
-tested. Packaged builds sign in to the Clave backend with email or Google.
+Early, pre-release. The core pipeline, the desktop app, the macOS, Windows and Linux readers and the
+connection to the Clave backend (sign-in with email or Google, the skills list, and uploading the
+statements you approve) are built and tested. The release workflow builds a macOS DMG, a Windows installer
+and Linux .deb and .rpm packages. What is left on Windows and Linux is listed in
+[docs/WINDOWS-TODO.md](docs/WINDOWS-TODO.md) and [docs/LINUX-TODO.md](docs/LINUX-TODO.md).
 
 ## License
 

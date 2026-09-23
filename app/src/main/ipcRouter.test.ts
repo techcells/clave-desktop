@@ -27,12 +27,32 @@ describe("ipc router", () => {
     const {engine, router} = await setup();
     const sample: Record<string, unknown[]> = {
       approve: ["x"], reject: ["x"], setCapture: [false], signIn: ["sardor", "correct"], updateSettings: [{reviewTime: "09:00"}],
-      retry: ["model"], deleteAllData: [{removeModel: false}]
+      retry: ["model"], deleteAllData: [{removeModel: false}], extension: ["check"]
     };
     for (const channel of INVOKE_CHANNELS) await expect(router.handle(channel, sample[channel] ?? []), channel).resolves.not.toThrow();
     for (const channel of ["quit", "takeCounters", "system", "__proto__", "constructor", "toString", ""]) {
       await expect(router.handle(channel, [])).rejects.toMatchObject({code: "BAD_CHANNEL"});
     }
+    await engine.quit();
+  });
+
+  it("hands the GNOME extension's four actions to the shell, and answers null where there is no extension", async () => {
+    const {engine, router} = await setup();
+    await expect(router.handle("extension", ["check"])).resolves.toBeNull();
+    const asked: string[] = [];
+    const linux = createIpcRouter({
+      engine, reader: {requestPermission: async () => undefined},
+      downloader: {state: () => ({kind: "ready"}), onChange: () => () => undefined, start: async () => undefined, pause: () => undefined},
+      recentApp: () => null, appInfo: {version: "1.0.0", modelSha256: "sha", modelSizeBytes: 5, standIns: true, platform: "linux"},
+      openWhatLeaves: async () => undefined, openLicences: async () => "LICENCES_MISSING", restartApp: () => undefined,
+      extension: async (action) => { asked.push(action); return "ready"; }
+    });
+    for (const action of ["install", "remove", "logOut", "check", "enableAll"]) await expect(linux.handle("extension", [action])).resolves.toBe("ready");
+    expect(asked).toEqual(["install", "remove", "logOut", "check", "enableAll"]);
+    for (const bad of [[], ["uninstall"], ["check", "extra"], [7]]) {
+      await expect(linux.handle("extension", bad), JSON.stringify(bad)).rejects.toMatchObject({code: "BAD_ARGS"});
+    }
+    expect(asked).toHaveLength(5);
     await engine.quit();
   });
 

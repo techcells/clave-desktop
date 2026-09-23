@@ -3,7 +3,7 @@ import {useState} from "react";
 import type {Blocker} from "../../shared/ipc";
 import {clave} from "../bridge";
 import {Button, Switch, useHeading} from "../components/Controls";
-import {blockerCopy, checkingPermissionLine, COPY} from "../copy";
+import {blockerCopy, checkingPermissionLine, COPY, LINUX_COPY} from "../copy";
 import {fixAction, statusSignature} from "../model/controls";
 import {firstBlocker, nothingReadLine} from "../model/views";
 import type {Shell} from "../shell";
@@ -101,6 +101,8 @@ export function Home({shell}: {shell: Shell}): ReactNode {
 /** One sentence, one button, and the button does the thing that actually fixes that blocker. */
 function Fix({shell, blocker}: {shell: Shell; blocker: Blocker}): ReactNode {
   const copy = blockerCopy(blocker, shell.appInfo.platform);
+  // Linux: an install that did not happen is said, not swallowed (Task 7 review, M5).
+  const [installFailed, setInstallFailed] = useState(false);
   const press = (): void | Promise<unknown> => {
     switch (fixAction(blocker)) {
       case "signIn": return shell.go("onboarding", "signIn");
@@ -114,6 +116,12 @@ function Fix({shell, blocker}: {shell: Shell; blocker: Blocker}): ReactNode {
       // Nothing for the user to force: the app is already retrying, so the button asks the window
       // to read the status again — one call, not a `status()` whose answer is then thrown away.
       case "reread": return shell.askStatus();
+      // Linux: the GNOME extension. The engine hears the new state from main by itself.
+      case "installExtension":
+        return clave.extension("install").then((state) => setInstallFailed(state === "missing" || state === "outdated"));
+      case "logOut": return clave.extension("logOut");
+      case "enableExtensions": return clave.extension("enableAll");
+      case "checkExtension": return clave.extension("check");
     }
   };
   return (
@@ -123,6 +131,9 @@ function Fix({shell, blocker}: {shell: Shell; blocker: Blocker}): ReactNode {
       {/* Keyed by the blocker: a different problem is a different button, so it must not inherit the
           previous one's in-flight state and sit there disabled with nothing running. */}
       <p className="actions"><Button key={blocker} tone="ink" label={copy.action} press={press} /></p>
+      {installFailed && fixAction(blocker) === "installExtension" ? <p className="problem">{LINUX_COPY.setup.installFailed}</p> : null}
+      {/* A logout loses unsaved work elsewhere: said here as in onboarding (Task 7 review, M12). */}
+      {blocker === "EXTENSION_NEEDS_LOGIN" ? <p className="note">{LINUX_COPY.setup.loginNote}</p> : null}
     </div>
   );
 }

@@ -4,7 +4,7 @@ import {DEFAULT_EXCLUDED_SITES, DEFAULT_EXCLUSIONS} from "../core/index";
 import {createDevReader} from "../standins/devReader";
 import {createReadyDownloader} from "../standins/readyDownloader";
 import {DEFAULT_REVIEW_TIME, PAUSE_FOR_MS, PIPELINE_TICK_MS, SCHEDULER_CHECK_MS, TAXONOMY_RETRY_MS, UPLOAD_BACKOFF_MS} from "./constants";
-import type {Engine, EngineDeps, UserSettingsPatch} from "./engine";
+import type {Blocker, Engine, EngineDeps, UserSettingsPatch} from "./engine";
 import {selfTestKey} from "./model/selfTest";
 import type {FileSystem} from "./ports/system";
 import {createHarness, type Harness} from "./testing/harness";
@@ -64,6 +64,23 @@ async function workThenLeave(h: Harness, engine: Engine): Promise<void> {
 describe("engine", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(Date.UTC(2026, 8, 17, 9, 0)); });
   afterEach(() => { vi.useRealTimers(); });
+
+  it("reads with the budget it was given (Linux: shell/platform.ts readBudgetMs), else the shared one", async () => {
+    for (const [given, expected] of [[2_500, 2_500], [undefined, 1_500]] as const) {
+      const h = createHarness();
+      const budgets: number[] = [];
+      const read = h.reader.read.bind(h.reader);
+      h.reader.read = (opts) => { budgets.push(opts.budgetMs); return read(opts); };
+      const engine = await ready(h, given === undefined ? {} : {readBudgetMs: given});
+      expect(await engine.setCapture(true)).toEqual({ok: true});
+      h.reader.front = {app: "Code", title: "report.sql"};
+      h.reader.text = WORK;
+      await vi.advanceTimersByTimeAsync(PIPELINE_TICK_MS);
+      expect(budgets.length, String(given)).toBeGreaterThan(0);
+      expect(new Set(budgets), String(given)).toEqual(new Set([expected]));
+      await engine.setCapture(false);
+    }
+  });
 
   it("a fresh install is off and says exactly what is missing", async () => {
     const h = createHarness();
@@ -439,6 +456,56 @@ describe("engine", () => {
     expect(h.downloader.state()).toEqual({kind: "ready"});
     await engine.deleteAllData({removeModel: true});
     expect(h.downloader.state()).toEqual({kind: "missing"});
+    await engine.quit();
+  });
+
+  it("counts the system's own blockers (Linux: the GNOME extension), before permission, and re-decides when they change", async () => {
+    const h = createHarness();
+    let current: Blocker[] = ["EXTENSION_NEEDS_LOGIN"];
+    const listeners = new Set<() => void>();
+    const systemBlockers = {current: () => current, onChange: (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; }};
+    const engine = await ready(h, {systemBlockers});
+    expect(engine.status().blockers).toEqual(["EXTENSION_NEEDS_LOGIN"]);
+    expect(await engine.setCapture(true)).toEqual({ok: false, blockers: ["EXTENSION_NEEDS_LOGIN"]});
+    const seen: Blocker[][] = [];
+    engine.onStatus((status) => seen.push([...status.blockers]));
+    current = [];
+    for (const cb of listeners) cb();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(engine.status().blockers).toEqual([]);
+    expect(seen.at(-1)).toEqual([]);
+    expect(await engine.setCapture(true)).toEqual({ok: true});
+    await engine.quit();
+    expect(listeners.size).toBe(0);
+  });
+
+  it("puts the system's blockers before the permission ones, since the extension comes before the share", async () => {
+    const h = createHarness();
+    h.reader.permissionValue = "denied";
+    const engine = await h.launch({systemBlockers: {current: () => ["EXTENSION_MISSING"], onChange: () => () => undefined}});
+    const blockers = engine.status().blockers;
+    expect(blockers.indexOf("EXTENSION_MISSING")).toBeLessThan(blockers.indexOf("NO_PERMISSION"));
+    await engine.quit();
+  });
+
+  it("delete all local data also deletes what lives outside the engine, before its own files go", async () => {
+    const h = createHarness();
+    const seen: number[] = [];
+    const engine = await ready(h, {alsoDelete: async () => { seen.push(h.fs.files.size); }});
+    await engine.setCapture(true);
+    await engine.deleteAllData({removeModel: false});
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeGreaterThan(0);                 // called while the engine's files were still there
+    expect([...h.fs.files.keys()]).toEqual([]);
+    await engine.quit();
+  });
+
+  it("delete all local data still deletes everything when the outside deletion fails", async () => {
+    const h = createHarness();
+    const engine = await ready(h, {alsoDelete: async () => { throw new Error("disk"); }});
+    await engine.deleteAllData({removeModel: false});
+    expect([...h.fs.files.keys()]).toEqual([]);
+    expect(engine.status().blockers).toContain("SIGNED_OUT");
     await engine.quit();
   });
 

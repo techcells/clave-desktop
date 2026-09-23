@@ -34,7 +34,9 @@ mod worker;
 
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod stub;
 // Not `windows`: that is the name of the crate this module is written against.
 #[cfg(target_os = "windows")]
@@ -42,7 +44,9 @@ mod win;
 
 #[cfg(target_os = "macos")]
 use crate::macos as sys;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+use crate::linux as sys;
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 use crate::stub as sys;
 #[cfg(target_os = "windows")]
 use crate::win as sys;
@@ -52,7 +56,9 @@ use std::sync::atomic::AtomicBool;
 
 #[cfg(target_os = "macos")]
 type SystemPlatform = macos::MacPlatform;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+type SystemPlatform = linux::LinuxPlatform;
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 type SystemPlatform = stub::StubPlatform;
 #[cfg(target_os = "windows")]
 type SystemPlatform = win::WinPlatform;

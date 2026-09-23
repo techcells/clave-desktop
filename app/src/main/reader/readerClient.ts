@@ -7,7 +7,7 @@ import {
   HELPER_EXIT_WINDOW_MS, HELPER_HEALTHY_AFTER_MS, HELPER_PLANNED_RESTART_MS, HELPER_PLANNED_RESTART_READS,
   HELPER_SHUTDOWN_GRACE_MS, HELPER_START_DEADLINE_MS, READER_PROTOCOL
 } from "./constants";
-import {encode, parseHelperPermission, parseLine, type HelperLink, type ToHelper} from "./protocol";
+import {encode, isPlausibleGrantToken, parseHelperPermission, parseLine, type HelperLink, type ToHelper} from "./protocol";
 
 /** Codes only. Nothing the helper read from a screen can travel through here. */
 export type ReaderClientEvent =
@@ -17,6 +17,29 @@ export type ReaderClientState = "idle" | "starting" | "ready" | "waiting" | "gav
 
 export interface ReaderClient extends Reader {
   state(): ReaderClientState;
+  /**
+   * Protocol 3. The screen-share grant main keeps (Linux: the ScreenCast portal's restore token).
+   * Remembered, and handed to every helper once it is ready, including one started after a crash.
+   * An implausible token is ignored. Other platforms' helpers ignore it.
+   */
+  grant(token: string): void;
+  /**
+   * Protocol 3. Capture was switched off: every ready helper gives up whatever keeps the screen
+   * shared, and opens nothing quietly until the next `grant`. Remembered, so a helper that starts
+   * later is brought to the same state.
+   */
+  release(): void;
+  /**
+   * "Delete all local data": the grant is forgotten here, and the helpers that hold it are sent away
+   * (without blame, finishing what they were asked), so no process keeps it and the next helper
+   * starts with none.
+   */
+  forgetGrant(): void;
+  /**
+   * Replace the helper with a fresh one, without blame (calls in flight finish first). Linux: the
+   * GNOME extension refuses a reader whose binary was replaced while it ran, and a fresh one is not.
+   */
+  restart(): void;
 }
 
 /** `frontWindow()` rejects with this when there is no helper to ask. See `frontWindow` below for why it must reject. */
@@ -49,7 +72,25 @@ interface Helper {
  * is trusted with nothing: every line it sends is parsed here and then checked again by the port's
  * own parsers. Text and titles are only ever handed to the caller; this file logs nothing.
  */
-export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onEvent?: (event: ReaderClientEvent) => void}): ReaderClient {
+export function createReaderClient(deps: {
+  spawn: () => HelperLink;
+  now: Now;
+  onEvent?: (event: ReaderClientEvent) => void;
+  /** Protocol 3: a helper's fresh screen-share grant, for main to keep in place of the spent one. */
+  onGrant?: (token: string) => void;
+  /** Protocol 4 (Linux): the GNOME extension started (`true`) or stopped (`false`) refusing a helper. */
+  onExtension?: (refused: boolean) => void;
+  /** Protocol 5 (Linux): the user stopped the screen share; main forgets the grant it keeps. */
+  onShareStopped?: () => void;
+  /**
+   * Whether a helper's `denied` can be stale, so that a fresh helper is worth trying (the refresh
+   * below). True on macOS, where the system check is cached for the life of the process, and the
+   * default. False on Linux: there `denied` is the helper's own live state (no grant, or the user
+   * stopped the share), a fresh helper knows less, not more, and replacing the helper that is
+   * showing GNOME's Share dialog closes the dialog under the user (live finding, 2026-09-23).
+   */
+  deniedMayBeStale?: boolean;
+}): ReaderClient {
   let current: Helper | null = null;
   /** A planned restart in progress: the next helper, warming up while `current` still serves. */
   let replacement: Helper | null = null;
@@ -72,6 +113,7 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
   let cureTried = false;
   /** How old a helper must be before a `denied` answer replaces it. Doubles while the answer stays `denied`. */
   let deniedRefreshMs = CLIENT_DENIED_REFRESH_MS;
+  const deniedMayBeStale = deps.deniedMayBeStale ?? true;
   /** Helpers that have been asked to go but have not gone yet. `dispose` owns them too. */
   const retiring = new Set<Helper>();
   /** Helpers taken out of service that are still answering calls made before that. `dispose` owns them too. */
@@ -87,8 +129,27 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
     try { deps.onEvent?.(event); } catch { /* an observer must never break the reader */ }
   }
 
+  /** The newest grant: main's, or a helper's fresher one. Every helper gets it once it is ready. */
+  let grantToken: string | null = null;
+  /**
+   * Whether the last word from main was `release` (capture stopped) rather than `grant`. A helper
+   * holds its token through a release and only stops opening sessions quietly, so a helper that
+   * starts, or is handed a fresher token, while this is set is sent the release again after the grant.
+   */
+  let released = false;
+
   function send(helper: Helper, message: ToHelper): void {
     try { helper.link.send(encode(message)); } catch { /* a dead pipe shows up as an exit */ }
+  }
+
+  /** Bring a ready helper to the grant state main last asked for. */
+  function handOver(helper: Helper): void {
+    if (grantToken !== null) send(helper, {op: "grant", token: grantToken});
+    if (released) send(helper, {op: "release"});
+  }
+
+  function readyHelpers(): Helper[] {
+    return [current, replacement].filter((helper): helper is Helper => helper !== null && helper.ready && !helper.gone);
   }
 
   function settleAll(helper: Helper, answer: Answer): void {
@@ -214,6 +275,38 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
     // Unreadable: whatever was asked has failed — and a helper on its way out has nothing left to wait for.
     if (!message) { settleAll(helper, "down"); leaveIfDrained(helper); tryPromote(); return; }
     if (message.kind === "focus") { if (helper === current && helper.ready) notifyFocus(); return; }
+    if (message.kind === "extension") {
+      try { deps.onExtension?.(message.refused); } catch { /* an observer must never break the reader */ }
+      return;
+    }
+    if (message.kind === "shareStopped") {
+      // The user ended the share. The token is dropped here, so no helper started from now on (the
+      // denied refresh's replacement, a restart after a crash) is handed it, and any OTHER live
+      // helper that already holds it is sent away: GNOME honours the token after a Stop, so either
+      // would reopen the share with no dialog (live finding, 2026-09-23). The helper that sent this
+      // drops it too and is refused until a session starts from the Share dialog, so it stays. A
+      // helper still finishing a read (draining) is sent `release` as well: a released helper opens
+      // no session quietly, so the read it has in flight cannot reopen the share either.
+      grantToken = null;
+      for (const other of [replacement, current, ...draining]) {
+        if (other && other !== helper && !other.gone && !other.retired && other.ready) send(other, {op: "release"});
+      }
+      for (const other of [replacement, current]) if (other && other !== helper && !other.gone) drain(other);
+      try { deps.onShareStopped?.(); } catch { /* an observer must never break the reader */ }
+      return;
+    }
+    if (message.kind === "grant") {
+      if (message.token === null) return;           // a token main would not keep: ignored, nothing fails
+      // Any live helper's token is the newest: the portal spent the previous one to make it. The other
+      // ready helper (a replacement waiting to take over) gets it at once, or it would restore with
+      // the spent one and meet a dialog.
+      grantToken = message.token;
+      for (const other of [current, replacement]) {
+        if (other && other !== helper && other.ready && !other.gone) handOver(other);
+      }
+      try { deps.onGrant?.(message.token); } catch { /* an observer must never break the reader */ }
+      return;
+    }
     if (message.kind === "ready") {
       if (helper.ready) return;
       if (message.protocol !== READER_PROTOCOL) {
@@ -228,6 +321,7 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
       }
       helper.ready = true;
       helper.readyAt = deps.now();
+      handOver(helper);
       if (helper.startTimer) { clearTimeout(helper.startTimer); helper.startTimer = null; }
       helper.healthyTimer = setTimeout(() => { backoff = HELPER_BACKOFF_FIRST_MS; }, HELPER_HEALTHY_AFTER_MS);
       tryPromote();
@@ -335,6 +429,29 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
   }
 
   return {
+    grant(token: string): void {
+      if (!isPlausibleGrantToken(token)) return;
+      grantToken = token;
+      released = false;
+      for (const helper of readyHelpers()) handOver(helper);
+    },
+
+    release(): void {
+      released = true;
+      for (const helper of readyHelpers()) send(helper, {op: "release"});
+    },
+
+    restart(): void {
+      for (const helper of [replacement, current]) if (helper) drain(helper);
+    },
+
+    forgetGrant(): void {
+      grantToken = null;
+      released = false;
+      // The replacement first: draining `current` promotes it, and it may hold the token too.
+      for (const helper of [replacement, current]) if (helper) drain(helper);
+    },
+
     state() {
       if (disposed) return "disposed";
       if (current) return current.ready ? "ready" : "starting";
@@ -366,7 +483,7 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
         // together must cost ONE replacement and ONE doubling: `drain` refuses the second by itself,
         // but the wait is doubled here, so it needs the same condition or one replacement is charged
         // twice over.
-        if (!gaveUp && !helper.retired && !helper.gone && deps.now() - helper.readyAt >= deniedRefreshMs) {
+        if (deniedMayBeStale && !gaveUp && !helper.retired && !helper.gone && deps.now() - helper.readyAt >= deniedRefreshMs) {
           deniedRefreshMs = Math.min(deniedRefreshMs * 2, CLIENT_DENIED_REFRESH_MAX_MS);
           drain(helper);
         }

@@ -27,7 +27,9 @@ import {dataPaths, deletablePaths} from "./storage/paths";
 /** Why capture cannot run. Fixed codes; the renderer turns each into one sentence and one fix button. */
 export type Blocker =
   | "SIGNED_OUT" | "NO_TAXONOMY" | "MODEL_MISSING" | "SELF_TEST_NEEDED" | "NO_PERMISSION" | "PERMISSION_NEEDS_RESTART"
-  | "SETTINGS_NEED_REVIEW" | "MODEL_PROBLEM" | "READER_PROBLEM" | "STORAGE_PROBLEM";
+  | "SETTINGS_NEED_REVIEW" | "MODEL_PROBLEM" | "READER_PROBLEM" | "STORAGE_PROBLEM"
+  // Linux: the GNOME extension that tells the reader which window is in front (`shell/gnomeExtension.ts`).
+  | "EXTENSION_MISSING" | "EXTENSION_OFF" | "EXTENSIONS_OFF_IN_GNOME" | "EXTENSION_NEEDS_LOGIN" | "EXTENSION_UNSUPPORTED";
 
 /**
  * Which kind of "nothing is coming through" this is, in the three groups a user can act on:
@@ -133,6 +135,19 @@ export interface EngineDeps {
   notifyCaptureResumed: () => void;
   /** A browser sign-in, when the build has one; without it `signInWithGoogle` answers OAUTH_BROWSER. */
   googleSignIn?: GoogleSignIn;
+  /**
+   * Data kept outside the engine that "Delete all local data" must also forget (Linux: the
+   * screen-share grant). Awaited once the engine's own writers have stopped and before its files are
+   * removed; a failure there does not stop the rest of the deletion.
+   */
+  alsoDelete?: () => Promise<void>;
+  /**
+   * Blockers that belong to the system the app runs on, decided outside the engine (Linux: the GNOME
+   * extension). Counted before the permission ones, because the extension comes before the share.
+   */
+  systemBlockers?: {current(): readonly Blocker[]; onChange(cb: () => void): () => void};
+  /** How long one read may take on this system (`shell/platform.ts` `readBudgetMs`); the shared budget when not given. */
+  readBudgetMs?: number;
 }
 
 export interface Engine {
@@ -249,6 +264,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
 
   const loop = createCaptureLoop({
     reader, idleSeconds: deps.idleSeconds, now,
+    ...(deps.readBudgetMs === undefined ? {} : {readBudgetMs: deps.readBudgetMs}),
     pipeline: {mayCapture: (front) => pipeline.mayCapture(front), ingest: (read) => pipeline.ingest(read)},
     onReaderProblem: () => {
       readerProblem = true;
@@ -298,6 +314,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
     if (!taxonomy.current()) found.push("NO_TAXONOMY");
     if (deps.downloader.state().kind !== "ready") found.push("MODEL_MISSING");
     else if (settings.get().selfTestPassedFor !== selfTestKey(deps.appVersion, deps.modelSha256)) found.push("SELF_TEST_NEEDED");
+    found.push(...(deps.systemBlockers?.current() ?? []));
     if (permission === "needsRestart") found.push("PERMISSION_NEEDS_RESTART");
     // Only a real "no". No answer yet (`unknown`) keeps capture off through `wouldRun` instead.
     else if (permission === "denied") found.push("NO_PERMISSION");
@@ -575,6 +592,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
   if (stopPower.paused()) applyPowerReason(stopPower.paused());
   const stopBroken = model.onBroken(() => { background(log.event("MODEL_PROBLEM")); background(evaluate()); });
   const stopDownload = deps.downloader.onChange(() => { background(evaluate()); });
+  const stopSystem = deps.systemBlockers?.onChange(() => { background(evaluate()); }) ?? (() => undefined);
   const stopSession = session.onChange(() => { pipeline.configure(config()); background(evaluate()); });
   const stopTaxonomy = taxonomy.onChange(() => { pipeline.configure(config()); background(evaluate()); });
   const stopSettings = settings.onChange(() => { pipeline.configure(config()); });
@@ -815,6 +833,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       // The last event before the files go. `app.log` is the last one deleted, so nothing written
       // here survives, and nothing is written after the folder is empty.
       await log.event("DATA_DELETED");
+      await deps.alsoDelete?.().catch(() => undefined);
       for (const path of deletablePaths(paths)) await fs.remove(path);
       await sentLog.load();
       if (removeModel) await deps.downloader.removeAll();
@@ -828,7 +847,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       stopped = true;
       stopTimers();
       if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
-      for (const stop of [stopBroken, stopDownload, stopSession, stopTaxonomy, stopSettings]) stop();
+      for (const stop of [stopBroken, stopDownload, stopSystem, stopSession, stopTaxonomy, stopSettings]) stop();
       stopPower.stop();
       // Awaited, not backgrounded: quitting is the commonest way a run ends, and an unawaited write
       // here would lose the run's tallies to the process exiting. It goes in the drain the quit

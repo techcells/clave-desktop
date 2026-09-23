@@ -39,6 +39,7 @@ export const clave: ClaveBridge = {
   openWhatLeaves: () => to().openWhatLeaves(),
   openLicences: () => to().openLicences(),
   restartApp: () => to().restartApp(),
+  extension: (action) => to().extension(action),
   onStatus: (cb) => to().onStatus(cb),
   onDownload: (cb) => to().onDownload(cb)
 };

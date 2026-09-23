@@ -46,7 +46,7 @@ pub fn run<P: Platform>(platform: P, jobs: &Jobs, refused: &AtomicBool) -> ! {
         match read_line(&mut stdin) {
             // End of stdin: the app is gone or has closed the pipe. An orphaned helper must never
             // outlive the app, so leave at once and cleanly.
-            Ok(None) => std::process::exit(0),
+            Ok(None) => crate::runtime::leave(0),
             Ok(Some(line)) => handle(&platform, jobs, refused, &line),
             Err(()) => die("E_STDIN", EXIT_STDIN),
         }
@@ -84,7 +84,9 @@ fn handle<P: Platform>(platform: &P, jobs: &Jobs, refused: &AtomicBool, line: &s
         Request::FrontWindow { id } => emit(&protocol::front_window_line(id, front_window_of(platform).as_ref())),
         Request::Read { id, budget_ms, expect, lines } => jobs.submit(id, budget_ms, expect, lines),
         Request::Cancel { target } => jobs.cancel(target),
-        Request::Shutdown => std::process::exit(0),
+        Request::Shutdown => crate::runtime::leave(0),
+        Request::Grant { token } => platform.grant(&token),
+        Request::Release => platform.release(),
     }
 }
 

@@ -14,6 +14,8 @@
 //              lockfile, then pruned to the Mac-arm64 packages.
 //   helper     dist/native/clave-reader goes NEXT to the bundle root, not into the asar: it is
 //              signed on its own and copied to Contents/MacOS by the bundle step.
+//   models     Linux only: Tesseract's `tessdata_fast` Portuguese model, from the folder CLAVE_TESSDATA
+//              names, checked against the SHA-256s the reader pins, staged beside the helper.
 import {spawnSync} from "node:child_process";
 import {createHash} from "node:crypto";
 import {cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync} from "node:fs";
@@ -37,6 +39,38 @@ export const DIST_STANDINS_ONLY = ["standins-taxonomy.json"];
 export const DIST_NEVER = ["reader-eval.cjs", "eval-gate.mjs"];
 /** dist/ files the staging step READS and never ships: the inlined packages' licence facts. Required. */
 export const DIST_STAGING_ONLY = ["bundled-packages.json"];
+/**
+ * The recognition models the Linux reader loads (`native/reader/src/linux/recognise.rs`, `MODELS`):
+ * the same files and SHA-256s, so a package can never carry a model the reader would refuse. The
+ * stage test reads the Rust source and fails when the two lists differ.
+ */
+export const TESSDATA_MODELS = [
+  {file: "por.traineddata", sha256: "c4932b937207a9514b7514d518b931a99938c02a28a5a5a553f8599ed58b7deb"}
+];
+
+/**
+ * Where the model comes from: `tessdata_fast` at a pinned commit (the tip of main since 2024-08-01), the
+ * file measured on 2026-09-24 (owner decision, Linux plan Task 11). CI downloads from these URLs;
+ * staging checks the SHA-256 above whatever the source.
+ */
+export const TESSDATA_SOURCE = {
+  repository: "tesseract-ocr/tessdata_fast",
+  commit: "87416418657359cb625c412a48b6e1d6d41c29bd",
+  get urls() { return TESSDATA_MODELS.map((m) => `https://raw.githubusercontent.com/${this.repository}/${this.commit}/${m.file}`); }
+};
+
+/** The GNOME extension `scripts/build.mjs` copies into dist/ on Linux; the app installs it from there (`app.ts`, `here("gnome-extension")`). */
+export const DIST_LINUX_EXTENSION = ["gnome-extension/extension.js", "gnome-extension/logic.js", "gnome-extension/metadata.json"];
+
+const linuxTarget = (llama, reflink, rustTarget) => ({
+  helper: "clave-reader",
+  keep: {"@node-llama-cpp": llama, "@reflink": [reflink]},
+  binaryHomes: [...llama.map((name) => `node_modules/@node-llama-cpp/${name}/bins/${name}/`), `node_modules/@reflink/${reflink}/`],
+  rustTarget,
+  distExtra: DIST_LINUX_EXTENSION,
+  models: TESSDATA_MODELS
+});
+
 /**
  * What ships differs per system in four facts, and only these: the helper's file name, which of
  * node-llama-cpp's and reflink's per-platform binary packages stay, the folders native binaries may
@@ -72,6 +106,17 @@ export const TARGETS = {
       files: ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"],
       into: ["node_modules/@node-llama-cpp/win-x64/bins/win-x64", "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan"]
     }
+  },
+  // Linux has an architecture level the others do not (decision 3: x64 public, arm64 internal only,
+  // for the arm64 VM). Every Linux build is native (the CI x64 runner, the arm64 VM), so the entry is
+  // chosen by `process.arch`. x64 keeps the CPU build and the Vulkan one, as Windows does, and drops
+  // CUDA for the same reason; arm64 has one build. reflink's glibc binaries only (no musl system runs
+  // GNOME 45). Both carry the GNOME extension in the asar and the models beside the helper.
+  linux: {
+    arches: {
+      x64: linuxTarget(["linux-x64", "linux-x64-vulkan"], "reflink-linux-x64-gnu", "x86_64-unknown-linux-gnu"),
+      arm64: linuxTarget(["linux-arm64"], "reflink-linux-arm64-gnu", "aarch64-unknown-linux-gnu")
+    }
   }
 };
 
@@ -97,14 +142,33 @@ export function pickRedistDir(candidates) {
   return versioned.length > 0 ? {path: versioned[0].path, version: versioned[0].version} : null;
 }
 
-/** The target for a platform, or `null` for one nothing here packages. */
-export function targetFor(platform) {
-  return Object.hasOwn(TARGETS, platform) ? TARGETS[platform] : null;
+/**
+ * The target for a platform, or `null` for one nothing here packages. A platform with an architecture
+ * level (Linux) needs a known `arch` too, never a guessed one; the others ignore it.
+ */
+export function targetFor(platform, arch) {
+  if (!Object.hasOwn(TARGETS, platform)) return null;
+  const entry = TARGETS[platform];
+  if (!entry.arches) return entry;
+  return typeof arch === "string" && Object.hasOwn(entry.arches, arch) ? entry.arches[arch] : null;
+}
+
+/** How a refusal names a system: `linux-ppc64` when the architecture is what is unknown. */
+const systemName = (platform, arch) => (Object.hasOwn(TARGETS, platform) && TARGETS[platform].arches && arch !== undefined ? `${platform}-${arch}` : String(platform));
+
+/** Checks the models found (`{file, sha256}`, sha256 null when unreadable) against `TESSDATA_MODELS`: `null`, or the first refusal. */
+export function checkModels(found) {
+  for (const model of TESSDATA_MODELS) {
+    const entry = found.find((f) => f.file === model.file);
+    if (!entry || entry.sha256 === null) return {code: "MODEL_MISSING", detail: model.file};
+    if (entry.sha256 !== model.sha256) return {code: "MODEL_HASH_WRONG", detail: model.file};
+  }
+  return null;
 }
 
 /** The one file under dist/native that exists, and where it goes: beside the asar, not inside it. */
 export const HELPER_IN_DIST = `native/${TARGETS.darwin.helper}`;
-const helperInDist = (platform) => `native/${(targetFor(platform) ?? TARGETS.darwin).helper}`;
+const helperInDist = (platform, arch) => `native/${(targetFor(platform, arch) ?? TARGETS.darwin).helper}`;
 /** The renderer files that must be there for the window to load at all. */
 export const RENDERER_REQUIRED = ["renderer/index.html", "renderer/main.js", "renderer/main.css"];
 
@@ -114,10 +178,12 @@ export const RENDERER_REQUIRED = ["renderer/index.html", "renderer/main.js", "re
  * path}}`. Refusals: a source map (nothing here ships one), a file nobody listed (a new build
  * output must be decided about here before it can ship), and a required file that is missing.
  */
-export function shipList(distFiles, flavour, platform = "darwin") {
+export function shipList(distFiles, flavour, platform = "darwin", arch = undefined) {
   if (!FLAVOURS.includes(flavour)) return {error: {code: "BAD_FLAVOUR", path: String(flavour)}};
-  if (targetFor(platform) === null) return {error: {code: "UNSUPPORTED_PLATFORM", path: String(platform)}};
-  const HELPER_IN_DIST = helperInDist(platform);
+  const target = targetFor(platform, arch);
+  if (target === null) return {error: {code: "UNSUPPORTED_PLATFORM", path: systemName(platform, arch)}};
+  const HELPER_IN_DIST = helperInDist(platform, arch);
+  const extra = target.distExtra ?? [];
   const files = [...distFiles].map((f) => f.split("\\").join("/")).sort();
   const ship = [];
   const consumed = [];
@@ -129,11 +195,11 @@ export function shipList(distFiles, flavour, platform = "darwin") {
     if (path === HELPER_IN_DIST) { helper = path; continue; }
     if (path.startsWith("native/")) return {error: {code: "UNEXPECTED_DIST_FILE", path}};
     if (path.startsWith("renderer/")) { ship.push(path); continue; }
-    if (DIST_ALWAYS.includes(path)) { ship.push(path); continue; }
+    if (DIST_ALWAYS.includes(path) || extra.includes(path)) { ship.push(path); continue; }
     if (DIST_STANDINS_ONLY.includes(path)) { if (flavour === "dev") ship.push(path); continue; }
     return {error: {code: "UNEXPECTED_DIST_FILE", path}};
   }
-  const required = [...DIST_ALWAYS, ...RENDERER_REQUIRED, ...(flavour === "dev" ? DIST_STANDINS_ONLY : [])];
+  const required = [...DIST_ALWAYS, ...RENDERER_REQUIRED, ...extra, ...(flavour === "dev" ? DIST_STANDINS_ONLY : [])];
   for (const path of required) if (!ship.includes(path)) return {error: {code: "DIST_INCOMPLETE", path}};
   if (helper === null) return {error: {code: "DIST_INCOMPLETE", path: HELPER_IN_DIST}};
   for (const path of DIST_STAGING_ONLY) if (!consumed.includes(path)) return {error: {code: "DIST_INCOMPLETE", path}};
@@ -141,11 +207,22 @@ export function shipList(distFiles, flavour, platform = "darwin") {
 }
 
 /**
+ * The bundle ids (packaging design, section 2). `dev` is never packaged: it is the checkout's
+ * unpackaged run. Also the Linux desktop id: the `.desktop` file's name, the Wayland app id and what
+ * the portals know the app by. (Defined here, re-exported by bundle.mjs, which imports this module.)
+ */
+export const BUNDLE_IDS = {internal: "dev.clave.agent.internal", release: "dev.clave.agent"};
+
+/**
  * The asar root's package.json. `main` is where esbuild put the entry; `dependencies` names the one
  * runtime package at the exact version app/package.json pins, so the offline install below resolves
  * exactly what the lockfile holds; nothing else (no scripts, no devDependencies, no `files`).
+ * On Linux, `desktopName` too: Electron reads it at start into CHROME_DESKTOP, which becomes the
+ * window's Wayland app id and X11 WM_CLASS. Without it Electron makes one from the package name, which
+ * matches no installed `.desktop` file, so GNOME could not name the app's own window "Clave Agent"
+ * (the reader excludes the app by that name) and the portals could not identify it.
  */
-export function runtimePackageJson({flavour, version, nodeLlamaCppVersion}) {
+export function runtimePackageJson({flavour, version, nodeLlamaCppVersion, platform = "darwin"}) {
   if (!FLAVOURS.includes(flavour)) throw new Error("BAD_FLAVOUR");
   if (typeof version !== "string" || version.length === 0) throw new Error("BAD_VERSION");
   if (typeof nodeLlamaCppVersion !== "string" || !/^[0-9]+[.][0-9]+[.][0-9]+$/.test(nodeLlamaCppVersion)) throw new Error("BAD_DEPENDENCY_VERSION");
@@ -154,7 +231,8 @@ export function runtimePackageJson({flavour, version, nodeLlamaCppVersion}) {
     version,
     private: true,
     main: "dist/main.cjs",
-    dependencies: {"node-llama-cpp": nodeLlamaCppVersion}
+    dependencies: {"node-llama-cpp": nodeLlamaCppVersion},
+    ...(platform === "linux" && Object.hasOwn(BUNDLE_IDS, flavour) ? {desktopName: `${BUNDLE_IDS[flavour]}.desktop`} : {})
   };
 }
 
@@ -168,7 +246,17 @@ export function lockHas(lockText, id) {
  * The binary packages that may ship, per scope, for a platform (`TARGETS[platform].keep`); every
  * sibling for another platform is dropped even if the offline install left one behind.
  */
-const keepFor = (platform) => (targetFor(platform) ?? TARGETS.darwin).keep;
+const keepFor = (platform, arch) => (targetFor(platform, arch) ?? TARGETS.darwin).keep;
+
+/**
+ * The kept node-llama-cpp builds (`TARGETS[platform].keep`) that are not among the installed package
+ * names. pnpm's offline resolve skips optional platform packages silently when its metadata cache is
+ * cold (release.yml warms it on CI), which would ship an app with no model engine.
+ */
+export function missingModelBinaries(installed, platform, arch) {
+  const keep = keepFor(platform, arch)["@node-llama-cpp"] ?? [];
+  return keep.map((name) => `@node-llama-cpp/${name}`).filter((id) => !installed.includes(id));
+}
 
 /**
  * Build leftovers a Windows binary package carries beside its DLLs: the import library a linker
@@ -190,7 +278,7 @@ export function pruneDecision(relPath, options = {}) {
   if (parts.some((p) => p.startsWith("."))) return "drop";
   if (parts[0] === "typescript") return "drop";
   const scope = parts[0];
-  const keep = keepFor(options.platform ?? "darwin");
+  const keep = keepFor(options.platform ?? "darwin", options.arch);
   // `@reflink/reflink` is the JavaScript front of the binary packages and stays; its siblings are per platform.
   const jsFront = scope === "@reflink" && parts[1] === "reflink";
   if (!jsFront && scope in keep && parts.length >= 2 && !keep[scope].includes(parts[1])) return "drop";
@@ -210,10 +298,11 @@ const BINARY_EXTENSIONS = [".node", ".dylib", ".so", ".dll", ".metallib"];
  * holds only what shipList allowed (this checks the negatives again, from the other side, so a
  * staging step that forgot to call shipList would still be caught). Native binaries may live only in
  * the platform's binary homes (`TARGETS`). Dotfiles are never allowed anywhere (a `.env`, a `.git`,
- * a `.DS_Store`). `platform` is the system being packaged; macOS when not given.
+ * a `.DS_Store`). `platform` is the system being packaged; macOS when not given. Linux needs its `arch`
+ * as well: without one the macOS homes apply, so nothing Linux-native passes on a guess.
  */
-export function forbidden(relPath, platform = "darwin") {
-  const target = targetFor(platform) ?? TARGETS.darwin;
+export function forbidden(relPath, platform = "darwin", arch = undefined) {
+  const target = targetFor(platform, arch) ?? TARGETS.darwin;
   const keep = target.keep;
   const path = relPath.split("\\").join("/");
   const parts = path.split("/").filter((p) => p.length > 0);
@@ -314,6 +403,8 @@ export function defaultTools(platform, home, env) {
       cargo: join(home, ".cargo", "bin", "cargo.exe")
     };
   }
+  // Linux: pnpm's standalone install folder (`~/.local/share/pnpm`) and rustup's default cargo.
+  if (platform === "linux") return {pnpm: posix.join(home, ".local", "share", "pnpm", "pnpm"), cargo: posix.join(home, ".cargo", "bin", "cargo")};
   return {pnpm: join(home, "Library", "pnpm", "bin", "pnpm"), cargo: "/opt/homebrew/opt/rustup/bin/cargo"};
 }
 
@@ -350,10 +441,10 @@ function findRedistDir(env) {
   return pickRedistDir(candidates);
 }
 
-export function stage({appDir, argv, env, home, log, err, platform = process.platform}) {
+export function stage({appDir, argv, env, home, log, err, platform = process.platform, arch = process.arch}) {
   const fail = (code, detail) => { err(`STAGE_FAILED ${code}${detail ? ` ${detail}` : ""}`); return 1; };
-  const target = targetFor(platform);
-  if (target === null) return fail("UNSUPPORTED_PLATFORM", platform);
+  const target = targetFor(platform, arch);
+  if (target === null) return fail("UNSUPPORTED_PLATFORM", systemName(platform, arch));
   const tools = defaultTools(platform, home, env);
   const out = resolveOut(argv, home, appDir);
   if (out.error) return fail(out.error);
@@ -371,15 +462,26 @@ export function stage({appDir, argv, env, home, log, err, platform = process.pla
 
   const distFiles = walk(dist).filter((e) => e.kind === "file").map((e) => e.rel);
   if (walk(dist).some((e) => e.kind === "symlink")) return fail("SYMLINK_IN_DIST");
-  const decided = shipList(distFiles, flavour, platform);
+  const decided = shipList(distFiles, flavour, platform, arch);
   if (decided.error) return fail(decided.error.code, decided.error.path);
 
   const appPackage = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8"));
   // The version is build.json's (what the bundles were built with), not package.json's as it is now:
   // a bump between build and stage must not ship two versions.
   let runtime;
-  try { runtime = runtimePackageJson({flavour, version: info.version, nodeLlamaCppVersion: appPackage.dependencies?.["node-llama-cpp"]}); }
+  try { runtime = runtimePackageJson({flavour, version: info.version, nodeLlamaCppVersion: appPackage.dependencies?.["node-llama-cpp"], platform}); }
   catch (error) { return fail(error instanceof Error ? error.message : "BAD_PACKAGE_JSON"); }
+
+  // Linux: the models, checked BEFORE anything is written, from the folder CLAVE_TESSDATA names (the
+  // same variable a development run gives the reader). Nothing is fetched here: a missing or altered
+  // model refuses the run.
+  const modelsFrom = target.models ? env.CLAVE_TESSDATA : null;
+  if (target.models) {
+    if (!modelsFrom) return fail("MODELS_MISSING", "set CLAVE_TESSDATA to the folder holding tessdata_fast por.traineddata");
+    const found = target.models.map((m) => ({file: m.file, sha256: existsSync(join(modelsFrom, m.file)) && !lstatSync(join(modelsFrom, m.file)).isSymbolicLink() ? sha256(join(modelsFrom, m.file)) : null}));
+    const problem = checkModels(found);
+    if (problem) return fail(problem.code, problem.detail);
+  }
 
   const staging = join(out.dir, flavour, "staging");
   const root = join(staging, "app");
@@ -391,6 +493,10 @@ export function stage({appDir, argv, env, home, log, err, platform = process.pla
     cpSync(join(dist, rel), join(root, "dist", rel));
   }
   cpSync(join(dist, decided.helper), join(staging, "helper", target.helper));
+  if (target.models) {
+    mkdirSync(join(staging, "tessdata"), {recursive: true});
+    for (const m of target.models) cpSync(join(modelsFrom, m.file), join(staging, "tessdata", m.file));
+  }
   writeFileSync(join(root, "package.json"), JSON.stringify(runtime, null, 2) + "\n");
 
   // The runtime closure, offline, from the store, at the lockfile's versions: the app's own lockfile
@@ -416,14 +522,16 @@ export function stage({appDir, argv, env, home, log, err, platform = process.pla
   const modules = join(root, "node_modules");
   if (!existsSync(modules)) return fail("PNPM_INSTALL_FAILED", "no node_modules");
   const lockText = readFileSync(join(appDir, "pnpm-lock.yaml"), "utf8");
-  const packageJsons = walk(modules).filter((e) => e.kind === "file" && posix.basename(e.rel) === "package.json" && pruneDecision(e.rel, {platform}) === "keep")
+  const packageJsons = walk(modules).filter((e) => e.kind === "file" && posix.basename(e.rel) === "package.json" && pruneDecision(e.rel, {platform, arch}) === "keep")
     .map((e) => { try { return JSON.parse(readFileSync(join(modules, e.rel), "utf8")); } catch { return null; } });
   for (const id of installedIds(packageJsons)) if (!lockHas(lockText, id)) return fail("LOCK_MISMATCH", id);
+  const missing = missingModelBinaries(packageJsons.filter((p) => typeof p?.name === "string").map((p) => p.name), platform, arch);
+  if (missing.length > 0) return fail("MODEL_BINARY_MISSING", `${missing.join(",")}: pnpm's offline resolve skipped it; fill pnpm's metadata cache with one online resolve (see release.yml)`);
 
   // Prune: dropped directories go whole; walk order is parent-first, so a dropped parent's children
   // are simply gone by the time their turn comes.
   for (const entry of walk(modules)) {
-    if (pruneDecision(entry.rel, {platform}) === "drop") rmSync(join(modules, entry.rel), {recursive: true, force: true});
+    if (pruneDecision(entry.rel, {platform, arch}) === "drop") rmSync(join(modules, entry.rel), {recursive: true, force: true});
   }
 
   // The system runtime the native binaries need, beside each of them (Windows: see TARGETS.win32.runtime).
@@ -445,7 +553,7 @@ export function stage({appDir, argv, env, home, log, err, platform = process.pla
   // bundle step to place in Contents/Resources.
   const cargo = env.CLAVE_CARGO ?? tools.cargo;
   if (!existsSync(cargo)) return fail("CARGO_MISSING", cargo);
-  const licences = generateLicences({root, appDir, flavour, cargo, env, rustTarget: target.rustTarget, runtime: systemRuntime});
+  const licences = generateLicences({root, appDir, flavour, cargo, env, rustTarget: target.rustTarget, runtime: systemRuntime, platform});
   if (licences.error) return fail(licences.error, licences.detail);
   writeFileSync(join(root, "dist", "THIRD-PARTY-LICENSES.txt"), licences.text);
   mkdirSync(join(staging, "electron"), {recursive: true});
@@ -458,7 +566,7 @@ export function stage({appDir, argv, env, home, log, err, platform = process.pla
   const entries = [];
   for (const entry of everything) {
     if (entry.kind !== "file") continue;
-    const why = forbidden(entry.rel, platform);
+    const why = forbidden(entry.rel, platform, arch);
     if (why) return fail(why, entry.rel);
     const full = join(root, entry.rel);
     entries.push({path: entry.rel, bytes: statSync(full).size, sha256: sha256(full)});
@@ -467,7 +575,10 @@ export function stage({appDir, argv, env, home, log, err, platform = process.pla
   if (lstatSync(helperPath).isSymbolicLink()) return fail("SYMLINK_IN_STAGING", "helper");
   // `platform` says which system this staging is for, so the steps after it (and the tests that read a
   // real run) judge it by that system's rules; a manifest without one is from before Windows, i.e. macOS.
-  const result = {...manifest(entries, info), platform, helper: {name: target.helper, bytes: statSync(helperPath).size, sha256: sha256(helperPath)}};
+  // Linux adds its architecture and the staged models, hashed again from the staged copies.
+  const models = target.models ? target.models.map((m) => { const path = join(staging, "tessdata", m.file); return {file: m.file, bytes: statSync(path).size, sha256: sha256(path)}; }) : null;
+  if (models) { const problem = checkModels(models); if (problem) return fail(problem.code, problem.detail); }
+  const result = {...manifest(entries, info), platform, ...(TARGETS[platform].arches ? {arch} : {}), helper: {name: target.helper, bytes: statSync(helperPath).size, sha256: sha256(helperPath)}, ...(models ? {models} : {})};
   writeFileSync(join(staging, "manifest.json"), JSON.stringify(result, null, 2) + "\n");
   log(`STAGE_OK ${flavour} files ${result.fileCount} bytes ${result.totalBytes} licences ${licences.counts.packages}+${licences.counts.crates} at ${staging}`);
   return 0;

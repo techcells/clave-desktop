@@ -14,6 +14,13 @@ Images and results go to `app/reader-eval/out/linux/` (ignored by git). Takes ab
 an M2. On a Mac it also runs Apple Vision on the same images, as a rough reference only: its lines
 are ordered by a simple sort there, not by the reader's own code.
 
+> **Note, 2026-09-24 (Linux plan, Task 11):** the app no longer ships the models measured here. Live reads with
+> `tessdata_best` `por+eng` ran past the read budget a third of the time, so the owner chose `tessdata_fast`
+> `por` alone (accents 0.98 against a Linux bar of 0.97) with a 2.5 s Linux read budget. That model is measured
+> by the reader's own opt-in test (`recognition_meets_the_thresholds` in `native/reader/src/linux/recognise.rs`),
+> not by this Docker harness, which still measures the models below. Numbers:
+> `docs/superpowers/reviews/2026-09-23-linux-measurements.md`.
+
 ## Result, 2026-09-23 (M2, arm64 Ubuntu 24.04 in Docker, Tesseract 5.3.4)
 
 Passes every threshold at 1x and 2x with **tessdata_best models, languages `por+eng` (Portuguese

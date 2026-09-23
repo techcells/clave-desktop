@@ -1,6 +1,6 @@
 import {z} from "zod";
 import {RULE_MAX_LENGTH} from "../core/constants";
-import {EVENT_CHANNELS, INVOKE_CHANNELS, type AppInfo, type EventChannel, type InvokeChannel, type OpenLicencesResult, type UserSettings} from "../shared/ipc";
+import {EVENT_CHANNELS, EXTENSION_ACTIONS, INVOKE_CHANNELS, type AppInfo, type EventChannel, type ExtensionAction, type ExtensionState, type InvokeChannel, type OpenLicencesResult, type UserSettings} from "../shared/ipc";
 import {IPC_MAX_ID_CHARS, IPC_MAX_IDENTIFIER_CHARS, IPC_MAX_ONBOARDING_STEP, IPC_MAX_PASSWORD_CHARS, IPC_MAX_RULES} from "./constants";
 import type {Engine} from "./engine";
 import type {Downloader} from "./model/download";
@@ -20,6 +20,8 @@ export interface IpcRouterDeps {
   openWhatLeaves: () => Promise<void>;
   openLicences: () => Promise<OpenLicencesResult>;
   restartApp: () => void;
+  /** Linux only: the GNOME extension's actions. Absent elsewhere, where the channel answers null. */
+  extension?: (action: ExtensionAction) => Promise<ExtensionState | null>;
 }
 
 export interface IpcRouter {
@@ -49,7 +51,8 @@ const ARGS = {
   signIn: z.tuple([z.string().min(1).max(IPC_MAX_IDENTIFIER_CHARS), z.string().min(1).max(IPC_MAX_PASSWORD_CHARS)]),
   updateSettings: z.tuple([patch]),
   retry: z.tuple([z.enum(["model", "reader"])]),
-  deleteAllData: z.tuple([z.object({removeModel: z.boolean()}).strict()])
+  deleteAllData: z.tuple([z.object({removeModel: z.boolean()}).strict()]),
+  extension: z.tuple([z.enum(EXTENSION_ACTIONS)])
 } satisfies Record<InvokeChannel, z.ZodTypeAny>;
 
 const isChannel = (value: string): value is InvokeChannel => (INVOKE_CHANNELS as readonly string[]).includes(value);
@@ -97,6 +100,7 @@ export function createIpcRouter(deps: IpcRouterDeps): IpcRouter {
       case "openWhatLeaves": return deps.openWhatLeaves();
       case "openLicences": return deps.openLicences();
       case "restartApp": deps.restartApp(); return undefined;
+      case "extension": return deps.extension ? deps.extension(a[0] as ExtensionAction) : null;
     }
   }
 

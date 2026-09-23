@@ -6,7 +6,8 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as licences from "./licences.mjs";
 
-const {ALLOWED, licenceField, chosenLicence, packageRoots, licenceFilesIn, cleanText, checkEntries, modelSection, render, pickLicenceFile, normaliseSource, linkedCrates, runtimeEntry} = licences as {
+const {ALLOWED, licenceField, chosenLicence, packageRoots, licenceFilesIn, cleanText, checkEntries, modelSection, render, pickLicenceFile, normaliseSource, linkedCrates, runtimeEntry, recognitionEntries} = licences as {
+  recognitionEntries: (fixed: unknown, platform: string) => {entries?: Array<{name: string; version: string; licence: string; files: string[]}>; error?: string; detail?: string};
   runtimeEntry: (fixed: unknown, runtime: unknown) => {entry?: Record<string, unknown> | null; error?: string};
   linkedCrates: (graph: unknown) => Array<{name: string; version: string; licence: string | null}>;
   pickLicenceFile: (files: string[], chosen: string | null) => string | null;
@@ -47,6 +48,53 @@ describe("runtimeEntry: a system runtime shipped beside the native binaries", ()
     expect(withRuntime).toContain("Microsoft Visual C++ Runtime 14.44.35112\nFiles: msvcp140.dll, vcruntime140.dll\nhttps://learn.microsoft.com/x\nLicence: Microsoft terms\n");
     expect(withRuntime).not.toContain("Appendix");
     expect(render(base).text).not.toContain("System runtime");
+  });
+});
+
+describe("recognitionEntries: the recognition models shipped with the Linux app", () => {
+  const entry = {name: "Tesseract model eng", version: "v", files: ["eng.traineddata"], licence: "Apache-2.0", source: "https://github.com/tesseract-ocr/tessdata_best", platforms: ["linux"]};
+  const fixed = [entry, {...entry, name: "Tesseract model por", files: ["por.traineddata"]}];
+
+  it("lists them for Linux and for no other system", () => {
+    expect(recognitionEntries(fixed, "linux").entries?.map((e) => e.name)).toEqual(["Tesseract model eng", "Tesseract model por"]);
+    for (const platform of ["darwin", "win32"]) expect(recognitionEntries(fixed, platform), platform).toEqual({entries: []});
+    expect(recognitionEntries(undefined, "darwin")).toEqual({entries: []});
+  });
+
+  it("refuses an entry without a name, files, a source, a licence or its systems, so a model never ships unlisted", () => {
+    for (const key of ["name", "files", "source", "licence", "platforms"]) {
+      const broken = {...entry, [key]: undefined};
+      expect(recognitionEntries([broken], "linux"), key).toEqual({error: "RECOGNITION_ENTRY_INVALID", detail: key});
+    }
+    expect(recognitionEntries([{...entry, files: []}], "linux")).toEqual({error: "RECOGNITION_ENTRY_INVALID", detail: "files"});
+    expect(recognitionEntries([{...entry, files: ["eng.traineddata", 3]}], "linux")).toEqual({error: "RECOGNITION_ENTRY_INVALID", detail: "files"});
+    expect(recognitionEntries([{...entry, files: [""]}], "linux")).toEqual({error: "RECOGNITION_ENTRY_INVALID", detail: "files"});
+    expect(recognitionEntries("not a list", "linux")).toEqual({error: "RECOGNITION_ENTRY_INVALID", detail: "list"});
+  });
+
+  it("the hand-kept file lists every model the Linux package ships, under Apache-2.0, with the source, commit and hash staging uses", async () => {
+    const real = JSON.parse(readFileSync(fileURLToPath(new URL("./licences.fixed.json", import.meta.url)), "utf8")) as {recognitionModels: unknown};
+    const {TESSDATA_MODELS, TESSDATA_SOURCE} = await import("./stage.mjs") as {TESSDATA_MODELS: Array<{file: string; sha256: string}>; TESSDATA_SOURCE: {repository: string; commit: string}};
+    const listed = recognitionEntries(real.recognitionModels, "linux").entries ?? [];
+    expect(listed.flatMap((e) => e.files).sort()).toEqual(TESSDATA_MODELS.map((m) => m.file).sort());
+    const repo = TESSDATA_SOURCE.repository.split("/")[1];
+    for (const e of listed) {
+      expect(chosenLicence(e.licence), e.name).toBe("Apache-2.0");
+      expect(e.source, e.name).toBe(`https://github.com/${TESSDATA_SOURCE.repository}`);
+      expect(e.name, e.name).toContain(`(${repo})`);
+      expect(e.version, e.name).toContain(`commit ${TESSDATA_SOURCE.commit.slice(0, 8)}`);
+      for (const file of e.files) expect(e.version, file).toContain(TESSDATA_MODELS.find((m) => m.file === file)?.sha256 ?? "unpinned");
+    }
+  });
+
+  it("is rendered in its own block when there is one, and not at all otherwise", () => {
+    const base = {app: {name: "a", version: "1"}, electron: {name: "Electron", version: "44", licence: "MIT", text: "E"}, packages: [], crates: [], components: [], model: "m", texts: {"Apache-2.0": "APACHE TEXT"}};
+    const text = render({...base, recognition: recognitionEntries(fixed, "linux").entries}).text ?? "";
+    expect(text).toContain("Text recognition models (bundled, Linux)\n");
+    expect(text).toContain("Tesseract model eng v\nhttps://github.com/tesseract-ocr/tessdata_best\nLicence: Apache-2.0\n");
+    expect(text).toContain("APACHE TEXT");
+    expect(render(base).text).not.toContain("Text recognition");
+    expect(render({...base, recognition: []}).text).not.toContain("Text recognition");
   });
 });
 
@@ -116,9 +164,38 @@ describe("chosenLicence: what this distribution takes from an SPDX expression", 
     expect(chosenLicence("Apache-2.0 OR GPL-3.0")).toBe("Apache-2.0");
     expect(chosenLicence("BlueOak-1.0.0 OR Apache-2.0")).toBe("BlueOak-1.0.0");
   });
+  it("takes a plain alternative beside an exception-carrying one (rustix, linux-raw-sys: Linux crates), never the exception itself", () => {
+    expect(chosenLicence("Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT")).toBe("MIT");
+    expect(chosenLicence("(Apache-2.0 WITH LLVM-exception) OR MIT")).toBe("MIT");
+    expect(chosenLicence("Apache-2.0 WITH LLVM-exception OR Apache-2.0")).toBe("Apache-2.0");
+    expect(chosenLicence("GPL-2.0 WITH Classpath-exception-2.0 OR MIT")).toBe("MIT");
+    expect(chosenLicence("Apache-2.0 WITH LLVM-exception")).toBeNull();
+    expect(chosenLicence("Apache-2.0 WITH LLVM-exception OR GPL-3.0")).toBeNull();
+    expect(chosenLicence("MIT AND Apache-2.0 WITH LLVM-exception")).toBeNull();
+    expect(chosenLicence("Apache-2.0 WITH OR MIT")).toBeNull();
+  });
+  it("allows Unicode-3.0 (owner, 2026-09-23): unicode-ident is linked into the Linux helper, and its text is on file", () => {
+    expect(chosenLicence("(MIT OR Apache-2.0) AND Unicode-3.0")).toBe("MIT AND Unicode-3.0");
+    const fixed = JSON.parse(readFileSync(fileURLToPath(new URL("./licences.fixed.json", import.meta.url)), "utf8")) as {texts: Record<string, string>};
+    expect(fixed.texts["Unicode-3.0"].startsWith("UNICODE LICENSE V3\n\nCOPYRIGHT AND PERMISSION NOTICE\n")).toBe(true);
+    expect(cleanText(fixed.texts["Unicode-3.0"])).toBe(fixed.texts["Unicode-3.0"]);
+  });
   it("requires every part of an AND", () => {
     expect(chosenLicence("MIT AND ISC")).toBe("MIT AND ISC");
     expect(chosenLicence("MIT AND GPL-2.0")).toBeNull();
+  });
+  it("reads grouping and precedence as SPDX does: AND binds tighter than OR, parentheses group", () => {
+    expect(chosenLicence("(MIT OR Apache-2.0) AND ISC")).toBe("MIT AND ISC");
+    expect(chosenLicence("(MIT OR Apache-2.0) AND GPL-3.0")).toBeNull();
+    expect(chosenLicence("MIT OR Apache-2.0 AND GPL-3.0")).toBe("MIT");
+    expect(chosenLicence("GPL-3.0 OR Apache-2.0 AND MIT")).toBe("Apache-2.0 AND MIT");
+    expect(chosenLicence("ISC AND (GPL-3.0 OR Zlib)")).toBe("ISC AND Zlib");
+    expect(chosenLicence("((MIT))")).toBe("MIT");
+    for (const bad of ["(MIT", "MIT)", "()", "MIT AND", "AND MIT", "MIT OR OR ISC", "MIT ISC", "(MIT ISC", "MIT OR AND", "OR MIT", "Apache-2.0 WITH ) OR MIT", "Apache-2.0 WITH AND OR MIT"]) expect(chosenLicence(bad), bad).toBeNull();
+    // An AND that repeats a licence names it once.
+    expect(chosenLicence("(MIT OR ISC) AND (MIT OR Zlib)")).toBe("MIT");
+    // Absurd nesting is refused, never a thrown error.
+    expect(chosenLicence(`${"(".repeat(20000)}MIT${")".repeat(20000)}`)).toBeNull();
   });
   it("refuses copyleft, unknown, exceptions, blank and non-strings", () => {
     for (const l of ["GPL-3.0", "LGPL-2.1", "AGPL-3.0", "MPL-2.0", "SEE LICENSE IN LICENSE", "UNLICENSED", "GPL-2.0 OR GPL-3.0", "MIT WITH Exception", "", "  ", "MIT OR", "Custom"]) {
@@ -239,6 +316,13 @@ describe("render", () => {
     expect(out).toContain("LICENSES.chromium.html");
     expect(out).toContain("Copyright (c) X");
   });
+  it("an AND entry points at each of its texts, and the appendix carries each once", () => {
+    const r = render({...sections, crates: [{name: "c", version: "1", licence: "(MIT OR Apache-2.0) AND ISC", text: null}]}).text ?? "";
+    expect(r).toContain("Licence: (MIT OR Apache-2.0) AND ISC (distributed here under MIT AND ISC)\n(standard MIT and ISC texts: see the appendix)");
+    expect(r).toContain("[ISC]\n\nISC STANDARD TEXT");
+    expect(r.split("MIT STANDARD TEXT").length - 1).toBe(1);
+  });
+
   it("appends each needed standard text exactly once, and no unneeded one", () => {
     expect(out.split("MIT STANDARD TEXT").length - 1).toBe(1);
     expect(out).not.toContain("ISC STANDARD TEXT");
@@ -266,7 +350,10 @@ describe("a real staged licence file, when one exists", () => {
     // (none means a run from before Windows, i.e. macOS).
     const manifestPath = join(path, "..", "..", "..", "manifest.json");
     const platform = (existsSync(manifestPath) ? (JSON.parse(readFileSync(manifestPath, "utf8")) as {platform?: string}).platform : undefined) ?? "darwin";
-    const crates = platform === "win32" ? ["\nwindows 0.62", "\nwindows-core 0.62"] : ["objc2-vision", "objc2-screen-capture-kit"];
+    const crates = platform === "win32" ? ["\nwindows 0.62", "\nwindows-core 0.62"] : platform === "linux" ? ["\nzbus 5.", "\npipewire 0.", "\nsha2 0."] : ["objc2-vision", "objc2-screen-capture-kit"];
+    // Linux ships its recognition model, listed in its own block; no other system mentions it.
+    if (platform === "linux") for (const needle of ["Text recognition models (bundled, Linux)", "Tesseract recognition model por (tessdata_fast)", "https://github.com/tesseract-ocr/tessdata_fast"]) expect(text, needle).toContain(needle);
+    else expect(text).not.toContain("Text recognition models");
     for (const crate of crates) expect(text, crate).toContain(crate);
     // Compile-time-only crates run inside the compiler and are not in the binary (`linkedCrates`).
     if (platform === "win32") for (const macro of ["\nwindows-implement ", "\nsyn ", "\nunicode-ident "]) expect(text, macro).not.toContain(macro);

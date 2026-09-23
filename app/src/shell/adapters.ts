@@ -3,10 +3,24 @@ import type {FromHost, HostLink, ToHost} from "../main/model/protocol";
 import type {Cipher} from "../main/ports/system";
 import type {PowerSource, ThermalState} from "../main/power";
 
-/** Electron `safeStorage` (the macOS Keychain) as the engine's Cipher. */
-export function createSafeStorageCipher(safeStorage: SafeStorage): Cipher {
+/**
+ * Electron `safeStorage` (the macOS Keychain, DPAPI on Windows, the desktop keyring on Linux) as the
+ * engine's Cipher.
+ *
+ * On Linux with no keyring, Electron still reports encryption as available but encrypts with a
+ * hardcoded password (`getSelectedStorageBackend()` answers `basic_text`), which protects nothing.
+ * There the cipher is unavailable, so nothing secret is stored and sign-in is refused through the
+ * existing `STORAGE_UNAVAILABLE` path (the Linux design's decision 5). `unknown` (asked before the
+ * app is ready) is treated the same way.
+ */
+export function createSafeStorageCipher(safeStorage: SafeStorage, nodePlatform: string = process.platform): Cipher {
+  const keyringOk = (): boolean => {
+    if (nodePlatform !== "linux") return true;
+    const backend = safeStorage.getSelectedStorageBackend();
+    return backend !== "basic_text" && backend !== "unknown";
+  };
   return {
-    available: () => safeStorage.isEncryptionAvailable(),
+    available: () => safeStorage.isEncryptionAvailable() && keyringOk(),
     encrypt: (plain) => new Uint8Array(safeStorage.encryptString(plain)),
     decrypt: (data) => safeStorage.decryptString(Buffer.from(data))
   };

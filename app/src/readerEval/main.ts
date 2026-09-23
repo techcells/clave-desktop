@@ -13,7 +13,7 @@
  * window, a local server, a child process, and one file written at the end.
  *
  * Three refusals, in order, before anything is read:
- *  - the helper does not announce protocol 2      -> `{"error":"PROTOCOL"}` and quit
+ *  - the helper does not announce protocol 3      -> `{"error":"PROTOCOL"}` and quit
  *  - the helper does not answer `permission: granted` -> `{"error":"NO_GRANT"}` and quit, in every
  *    mode BUT `coldstart`, whose job is to report that answer rather than to refuse on it — its
  *    verdict in `summary.ts` is what then fails the run. `requestPermission` is NEVER called, in any

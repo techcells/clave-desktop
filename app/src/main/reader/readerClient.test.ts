@@ -2,7 +2,8 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {createFakeHelpers, type FakeHelpers} from "../testing/fakeReaderHelper";
 import {
   CLIENT_CALL_DEADLINE_MS, CLIENT_DENIED_REFRESH_MS, CLIENT_MAX_READ_BUDGET_MS, CLIENT_READ_GRACE_MS, HELPER_BACKOFF_MAX_MS,
-  HELPER_EXIT_LIMIT, HELPER_PLANNED_RESTART_MS, HELPER_PLANNED_RESTART_READS, HELPER_SHUTDOWN_GRACE_MS, HELPER_START_DEADLINE_MS
+  HELPER_EXIT_LIMIT, HELPER_PLANNED_RESTART_MS, HELPER_PLANNED_RESTART_READS, HELPER_SHUTDOWN_GRACE_MS, HELPER_START_DEADLINE_MS,
+  READER_PROTOCOL
 } from "./constants";
 import type {HelperLink} from "./protocol";
 import {createReaderClient, ReaderDown, type ReaderClient, type ReaderClientEvent} from "./readerClient";
@@ -726,6 +727,24 @@ describe("reader client: calls", () => {
       helpers.latest().answerLast({permission: "denied"});
       expect(await again).toBe("denied");
     });
+
+    it("on Linux a `denied` is never stale: the helper showing GNOME's Share dialog is kept, however long it takes", async () => {
+      // Live finding, 2026-09-23: the Share dialog closed itself about 3 s in. The helper showing it
+      // answered `denied` while the user chose, the refresh sent it away, and its exit closed the
+      // dialog (and crashed GNOME's portal in the VM). The Linux helper's `denied` is its own live
+      // state: a fresh helper knows less, not more.
+      client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), deniedMayBeStale: false});
+      await readyIdle();
+      const asked = client.requestPermission();     // the helper opens the dialog on its own thread and answers at once
+      helpers.latest().answerLast({});
+      await asked;
+      for (let second = 0; second < 120; second += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(await denied()).toBe("denied");
+      }
+      expect(helpers.all).toHaveLength(1);
+      expect(helpers.all[0]?.received.some((m) => m.op === "shutdown")).toBe(false);
+    });
   });
 
   describe("focus", () => {
@@ -913,7 +932,7 @@ describe("reader client: a link that delivers lines from inside `onLine`", () =>
   }
 
   it("a good `ready` delivered during registration leaves the client ready", async () => {
-    const client = createReaderClient({spawn: () => reentrant(['{"event":"ready","protocol":2}']), now: () => Date.now()});
+    const client = createReaderClient({spawn: () => reentrant([JSON.stringify({event: "ready", protocol: READER_PROTOCOL})]), now: () => Date.now()});
     void client.permission();
     expect(client.state()).toBe("ready");
     await disposeOf(client);
@@ -926,7 +945,7 @@ describe("reader client: a link that delivers lines from inside `onLine`", () =>
     const client = createReaderClient({
       spawn: () => {
         spawned += 1;
-        if (spawned > 1) return reentrant(['{"event":"ready","protocol":2}']);
+        if (spawned > 1) return reentrant([JSON.stringify({event: "ready", protocol: READER_PROTOCOL})]);
         return {
           send: (line) => { if (line.includes("shutdown")) first.shutdown = true; },
           onLine(cb) { first.say = cb; },
@@ -938,7 +957,7 @@ describe("reader client: a link that delivers lines from inside `onLine`", () =>
       now: () => Date.now(), onEvent: (e) => events.push(e)
     });
     void client.permission();
-    first.say('{"event":"ready","protocol":2}');
+    first.say(JSON.stringify({event: "ready", protocol: READER_PROTOCOL}));
     await vi.advanceTimersByTimeAsync(HELPER_PLANNED_RESTART_MS);
     void client.permission();                                    // plans the replacement, ready on arrival
     expect(spawned).toBe(2);
@@ -946,5 +965,359 @@ describe("reader client: a link that delivers lines from inside `onLine`", () =>
     expect(events).toEqual(["HELPER_REPLACED"]);
     expect(first.shutdown).toBe(true);
     await disposeOf(client);
+  });
+});
+
+const WINDOW_FOR_GRANT = {app: "Code", bundleId: "com.microsoft.VSCode", title: "query.sql"};
+
+describe("reader client: the screen-share grant (protocol 3)", () => {
+  let helpers: FakeHelpers;
+  let grants: string[];
+  let client: ReaderClient;
+  const settle = () => vi.advanceTimersByTimeAsync(0);
+
+  async function ready(): Promise<void> {
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    helpers = createFakeHelpers();
+    grants = [];
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onGrant: (token) => grants.push(token)});
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("hands the grant to a ready helper, and nothing before it is ready", async () => {
+    client.grant("t-1");
+    void client.permission();
+    expect(helpers.latest().received.some((m) => m.op === "grant")).toBe(false);
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received).toContainEqual({op: "grant", token: "t-1"});
+  });
+
+  it("sends a grant given while the helper is up at once", async () => {
+    await ready();
+    client.grant("t-2");
+    expect(helpers.latest().received).toContainEqual({op: "grant", token: "t-2"});
+  });
+
+  it("passes a helper's new token on, and gives that newest one to a restarted helper", async () => {
+    client.grant("t-old");
+    await ready();
+    helpers.latest().emit({event: "grant", token: "t-new"});
+    await settle();
+    expect(grants).toEqual(["t-new"]);
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.all.length).toBeGreaterThan(1);
+    expect(helpers.latest().received).toContainEqual({op: "grant", token: "t-new"});
+    expect(helpers.latest().received).not.toContainEqual({op: "grant", token: "t-old"});
+  });
+
+  it("a grant event fails nothing that was in flight", async () => {
+    await ready();
+    const permission = client.permission();
+    helpers.latest().emit({event: "grant", token: "t-3"});
+    helpers.latest().answerLast({permission: "granted"});
+    await expect(permission).resolves.toBe("granted");
+  });
+
+  it("a grant event with a bad token is ignored, and fails nothing in flight", async () => {
+    client.grant("t-good");
+    await ready();
+    const permission = client.permission();
+    helpers.latest().emit({event: "grant", token: "not a token"});
+    helpers.latest().answerLast({permission: "granted"});
+    await expect(permission).resolves.toBe("granted");
+    expect(grants).toEqual([]);
+  });
+
+  it("a new token reaches the other ready helper at once, so a replacement never holds a spent one", async () => {
+    client.grant("t-1");
+    await ready();
+    const first = helpers.latest();
+    await vi.advanceTimersByTimeAsync(HELPER_PLANNED_RESTART_MS);
+    const held = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});   // keeps the old helper busy, so no swap
+    const replacement = helpers.latest();
+    expect(replacement).not.toBe(first);
+    replacement.ready();
+    await settle();
+    expect(replacement.received).toContainEqual({op: "grant", token: "t-1"});
+    first.emit({event: "grant", token: "t-2"});                               // the old helper opened a session
+    await settle();
+    expect(replacement.received).toContainEqual({op: "grant", token: "t-2"});
+    first.answerLast({ok: false, reason: "failed"});
+    await held;
+  });
+
+  it("an implausible token is not remembered or sent", async () => {
+    await ready();
+    client.grant("a b");
+    expect(helpers.latest().received.some((m) => m.op === "grant")).toBe(false);
+  });
+
+  it("sends release to a ready helper, and never to a helper that is not up", async () => {
+    client.release();
+    expect(helpers.all).toHaveLength(0);
+    void client.permission();                 // a helper starts, and is not ready yet
+    client.release();
+    expect(helpers.latest().received.some((m) => m.op === "release")).toBe(false);
+    helpers.latest().ready();
+    await settle();
+    client.release();
+    expect(helpers.latest().received).toContainEqual({op: "release"});
+  });
+
+  it("a helper started after a release gets the grant and then the release, as the one it replaces had them", async () => {
+    client.grant("t-1");
+    await ready();
+    client.release();
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    client.release();                         // sent while the replacement is still starting: dropped, and not needed
+    helpers.latest().ready();
+    await settle();
+    const handshake = helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release");
+    expect(handshake).toEqual([{op: "grant", token: "t-1"}, {op: "release"}]);
+  });
+
+  it("a grant after a release lifts it: the next helper gets the grant alone", async () => {
+    client.grant("t-1");
+    await ready();
+    client.release();
+    client.grant("t-1");
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release")).toEqual([{op: "grant", token: "t-1"}]);
+  });
+
+  it("a release reaches a ready replacement too, and a token forwarded to it while released is followed by the release", async () => {
+    client.grant("t-1");
+    await ready();
+    const first = helpers.latest();
+    await vi.advanceTimersByTimeAsync(HELPER_PLANNED_RESTART_MS);
+    const held = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});   // keeps the old helper busy, so no swap
+    const replacement = helpers.latest();
+    expect(replacement).not.toBe(first);
+    replacement.ready();
+    await settle();
+    client.release();
+    expect(first.received).toContainEqual({op: "release"});
+    expect(replacement.received).toContainEqual({op: "release"});
+    first.emit({event: "grant", token: "t-2"});
+    await settle();
+    expect(replacement.received.filter((m) => m.op === "grant" || m.op === "release").slice(-2))
+      .toEqual([{op: "grant", token: "t-2"}, {op: "release"}]);
+    first.answerLast({ok: false, reason: "failed"});
+    await held;
+  });
+
+  it("while released, a helper's new token is kept, and the next helper gets it and then the release", async () => {
+    client.grant("t-1");
+    const first = await (async () => { await ready(); return helpers.latest(); })();
+    client.release();
+    first.emit({event: "grant", token: "t-2"});
+    await settle();
+    expect(grants).toEqual(["t-2"]);
+    first.exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release"))
+      .toEqual([{op: "grant", token: "t-2"}, {op: "release"}]);
+  });
+
+  it("forgetting the grant sends the helper holding it away, and the next helper is given nothing", async () => {
+    client.grant("t-1");
+    await ready();
+    client.release();
+    const holder = helpers.latest();
+    client.forgetGrant();
+    expect(holder.received).toContainEqual({op: "shutdown"});
+    const fresh = helpers.latest();
+    expect(fresh).not.toBe(holder);
+    fresh.ready();
+    await settle();
+    expect(fresh.received.filter((m) => m.op === "grant" || m.op === "release")).toEqual([]);
+  });
+
+  it("forgetting the grant with no helper running starts none, and a later helper is given nothing", async () => {
+    client.grant("t-1");
+    client.forgetGrant();
+    expect(helpers.all).toHaveLength(0);
+    await ready();
+    expect(helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release")).toEqual([]);
+  });
+
+  it("passes the extension's refusals on, and a throwing observer breaks nothing (protocol 4)", async () => {
+    const heard: boolean[] = [];
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onExtension: (refused) => { heard.push(refused); throw new Error("boom"); }});
+    await ready();
+    helpers.latest().emit({event: "extension", refused: true});
+    helpers.latest().emit({event: "extension", refused: false});
+    await settle();
+    expect(heard).toEqual([true, false]);
+    const permission = client.permission();
+    helpers.latest().answerLast({permission: "granted"});
+    await expect(permission).resolves.toBe("granted");
+  });
+
+  it("restarts on request: the helper is sent away without blame, and a fresh one gets the grant", async () => {
+    client.grant("t-1");
+    await ready();
+    const old = helpers.latest();
+    client.restart();
+    expect(old.received).toContainEqual({op: "shutdown"});
+    const fresh = helpers.latest();
+    expect(fresh).not.toBe(old);
+    fresh.ready();
+    await settle();
+    expect(fresh.received).toContainEqual({op: "grant", token: "t-1"});
+  });
+
+  it("a stopped share (protocol 5): the helper that replaces a `denied` one is given no token at all", async () => {
+    // The live finding of 2026-09-23: the user pressed Stop on GNOME's indicator, the helper answered
+    // `denied`, the denied refresh replaced it, and the replacement, handed the kept token, reopened
+    // the share with no dialog about 10 s later.
+    let stopped = 0;
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onShareStopped: () => { stopped += 1; }});
+    client.grant("t-1");
+    await ready();
+    const stopper = helpers.latest();
+    stopper.emit({event: "shareStopped"});
+    await settle();
+    expect(stopped).toBe(1);
+    await vi.advanceTimersByTimeAsync(CLIENT_DENIED_REFRESH_MS);
+    const permission = client.permission();
+    stopper.answerLast({permission: "denied"});
+    await expect(permission).resolves.toBe("denied");
+    expect(stopper.received).toContainEqual({op: "shutdown"});
+    const fresh = helpers.latest();
+    expect(fresh).not.toBe(stopper);
+    fresh.ready();
+    await settle();
+    expect(fresh.received.filter((m) => m.op === "grant")).toEqual([]);
+  });
+
+  it("a stopped share sends away a ready replacement that already holds the token, and not the helper that stopped", async () => {
+    client.grant("t-1");
+    await ready();
+    const first = helpers.latest();
+    await vi.advanceTimersByTimeAsync(HELPER_PLANNED_RESTART_MS);
+    const held = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});   // keeps the old helper busy, so no swap
+    const replacement = helpers.latest();
+    expect(replacement).not.toBe(first);
+    replacement.ready();
+    await settle();
+    expect(replacement.received).toContainEqual({op: "grant", token: "t-1"});
+    first.emit({event: "shareStopped"});
+    await settle();
+    expect(replacement.received).toContainEqual({op: "shutdown"});
+    expect(first.received.some((m) => m.op === "shutdown")).toBe(false);
+    first.answerLast({ok: false, reason: "failed"});
+    await held;
+  });
+
+  it("a stopped share from a helper on its way out releases and sends away the current one, even mid-read", async () => {
+    // A restart (the extension's refusal, Task 7) leaves the old helper finishing a read while the
+    // new one already holds the token. The old one reports the Stop: the new one must neither open a
+    // session quietly with the read it has in flight nor stay in service with the token.
+    client.grant("t-1");
+    await ready();
+    const old = helpers.latest();
+    const oldRead = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});
+    client.restart();
+    const fresh = helpers.latest();
+    expect(fresh).not.toBe(old);
+    fresh.ready();
+    await settle();
+    expect(fresh.received).toContainEqual({op: "grant", token: "t-1"});
+    const freshRead = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});
+    await settle();
+    old.emit({event: "shareStopped"});
+    await settle();
+    const after = fresh.received.slice(fresh.received.findIndex((m) => m.op === "read"));
+    expect(after).toContainEqual({op: "release"});
+    old.answerLast({ok: false, reason: "failed"});
+    fresh.answerLast({ok: false, reason: "failed"});
+    await Promise.allSettled([oldRead, freshRead]);
+    await settle();
+    expect(fresh.received).toContainEqual({op: "shutdown"});
+    const next = helpers.latest();
+    expect(next).not.toBe(fresh);
+    next.ready();
+    await settle();
+    expect(next.received.filter((m) => m.op === "grant")).toEqual([]);
+  });
+
+  it("a stopped share releases a helper that is only finishing a read, so that read opens nothing", async () => {
+    client.grant("t-1");
+    await ready();
+    const old = helpers.latest();
+    const oldRead = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});
+    client.restart();                            // `old` now drains: its read is still in flight
+    const fresh = helpers.latest();
+    fresh.ready();
+    await settle();
+    fresh.emit({event: "shareStopped"});
+    await settle();
+    expect(old.received).toContainEqual({op: "release"});
+    expect(fresh.received.some((m) => m.op === "shutdown")).toBe(false);
+    old.answerLast({ok: false, reason: "failed"});
+    await oldRead.catch(() => undefined);
+  });
+
+  it("after a stopped share, a token from a share the user started again is kept and handed on", async () => {
+    client.grant("t-1");
+    await ready();
+    helpers.latest().emit({event: "shareStopped"});
+    helpers.latest().emit({event: "grant", token: "t-2"});    // the Share dialog, pressed again
+    await settle();
+    expect(grants).toEqual(["t-2"]);
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received.filter((m) => m.op === "grant")).toEqual([{op: "grant", token: "t-2"}]);
+  });
+
+  it("a shareStopped observer that throws breaks nothing, and the token is still dropped", async () => {
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onShareStopped: () => { throw new Error("boom"); }});
+    client.grant("t-1");
+    await ready();
+    helpers.latest().emit({event: "shareStopped"});
+    await settle();
+    const permission = client.permission();
+    helpers.latest().answerLast({permission: "denied"});
+    await expect(permission).resolves.toBe("denied");
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received.filter((m) => m.op === "grant")).toEqual([]);
+  });
+
+  it("an observer that throws does not break the client", async () => {
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onGrant: () => { throw new Error("boom"); }});
+    await ready();
+    helpers.latest().emit({event: "grant", token: "t-4"});
+    await settle();
+    const permission = client.permission();
+    helpers.latest().answerLast({permission: "denied"});
+    await expect(permission).resolves.toBe("denied");
   });
 });

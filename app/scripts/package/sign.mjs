@@ -49,6 +49,17 @@ export function identityDecision({flavour, requested, identities}) {
   return {identity: found.name, developerId};
 }
 
+/**
+ * Linux: there is nothing to sign with (no code-signing scheme the desktop checks), so both packaged
+ * flavours are fused and left unsigned, and the SHA-256 checksums published beside the packages are
+ * the integrity check. `--sign` or a `--level` is refused rather than silently ignored.
+ */
+export function linuxSignDecision({flavour, requested, levelGiven}) {
+  if (flavour !== "internal" && flavour !== "release") return {error: "BAD_FLAVOUR"};
+  if ((requested !== null && requested !== undefined) || levelGiven !== false) return {error: "LINUX_HAS_NO_SIGNING"};
+  return {skip: true};
+}
+
 /** `--sign <name>` and `--level <n>` from argv; `--sign=` spellings and repeats refuse. */
 export function parseSignArgs(argv) {
   const one = (flag) => {
@@ -138,12 +149,14 @@ export async function signBundle({appDir, argv, env, home, log, err}) {
   const appName = report.appName;
   // A report from before Windows names no platform: it describes a macOS bundle.
   const windows = report.platform === "win32";
-  const executable = windows ? join(appPath, report.executable ?? `${appName}.exe`) : join(appPath, "Contents", "MacOS", appName);
-  const helper = windows ? join(appPath, report.helper ?? "clave-reader.exe") : join(appPath, "Contents", "MacOS", "clave-reader");
+  const linux = report.platform === "linux";
+  const executable = windows ? join(appPath, report.executable ?? `${appName}.exe`) : linux ? join(appPath, report.executable ?? "") : join(appPath, "Contents", "MacOS", appName);
+  const helper = windows ? join(appPath, report.helper ?? "clave-reader.exe") : linux ? join(appPath, report.helper ?? "clave-reader") : join(appPath, "Contents", "MacOS", "clave-reader");
+  if (linux && !report.executable) return fail("BUNDLE_INCOMPLETE", "executable");
   if (!existsSync(executable) || !existsSync(helper)) return fail("BUNDLE_INCOMPLETE");
 
   let probe = {defaultLocation: true, status: 1, output: ""};
-  if (windows) probe = runningProbe(appPath, "win32");
+  if (windows || linux) probe = runningProbe(appPath, report.platform);
   else {
     try { probe = {...probe, status: 0, output: execFileSync("/usr/bin/pgrep", ["-f", join(appPath, "Contents", "MacOS")], {stdio: ["ignore", "pipe", "pipe"]}).toString()}; }
     catch (error) { probe = {...probe, status: Number.isInteger(error?.status) ? error.status : null, output: String(error?.stdout ?? "")}; }
@@ -156,6 +169,19 @@ export async function signBundle({appDir, argv, env, home, log, err}) {
   // up yet (owner decision, 2026-09-23: unsigned for now): an internal build is fused and left
   // unsigned, and a release build refuses exactly as an unsigned macOS release does.
   if (windows && args.sign !== null) return fail("WINDOWS_SIGNING_NOT_SET_UP");
+  if (linux) {
+    const decided = linuxSignDecision({flavour, requested: args.sign, levelGiven: argv.some((a) => typeof a === "string" && a.startsWith("--level"))});
+    if (decided.error) return fail(decided.error);
+    const flippedLinux = await flip(executable, "linux");
+    if (flippedLinux.error) return fail(flippedLinux.error, flippedLinux.detail);
+    report.fused = true;
+    report.fuses = flippedLinux.wire;
+    report.signed = false;
+    report.integrity = "sha256 checksums";
+    writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+    log(`HARDEN_OK ${flavour} fuses set, unsigned (Linux: checksums are the integrity check) at ${appPath}`);
+    return 0;
+  }
   let identities = [];
   if (!windows) {
     try { identities = parseIdentities(execFileSync("/usr/bin/security", ["find-identity", "-p", "codesigning"], {stdio: ["ignore", "pipe", "pipe"]}).toString()); }

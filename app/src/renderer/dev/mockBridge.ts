@@ -19,15 +19,23 @@ export type Scenario =
   | "onboarding-neverread" | "onboarding-reviewtime" | "onboarding-done"
   | "home-on" | "home-off" | "home-problem" | "home-checking"
   | "home-nothing-notallowed" | "home-nothing-nowindow" | "home-nothing-other"
-  | "review" | "review-empty" | "settings" | "signed-out";
+  | "review" | "review-empty" | "settings" | "signed-out"
+  // Linux (the window is told platform "linux"): the screen-sharing step's stages, and the rest.
+  | "linux-onboarding-extension" | "linux-onboarding-login" | "linux-onboarding-extensions-off" | "linux-onboarding-share"
+  | "linux-signin" | "linux-home-login" | "linux-settings";
 
 export const SCENARIOS: readonly Scenario[] = [
   "onboarding-pitch", "onboarding-signin", "onboarding-model", "onboarding-permission", "onboarding-translocated",
   "onboarding-neverread", "onboarding-reviewtime", "onboarding-done",
   "home-on", "home-off", "home-problem", "home-checking",
   "home-nothing-notallowed", "home-nothing-nowindow", "home-nothing-other",
-  "review", "review-empty", "settings", "signed-out"
+  "review", "review-empty", "settings", "signed-out",
+  "linux-onboarding-extension", "linux-onboarding-login", "linux-onboarding-extensions-off", "linux-onboarding-share",
+  "linux-signin", "linux-home-login", "linux-settings"
 ];
+
+/** The scenarios that play Linux. */
+export const isLinux = (scenario: Scenario): boolean => scenario.startsWith("linux-");
 
 export const isScenario = (value: string | null): value is Scenario =>
   value !== null && (SCENARIOS as readonly string[]).includes(value);
@@ -77,7 +85,9 @@ const status = (over: Partial<EngineStatus> = {}): EngineStatus => ({
 });
 
 const settings = (over: Partial<UserSettings> = {}): UserSettings => ({
-  exclusions: ["1Password", "Messages", "Mail", "Calendar"],
+  // Stored rules, as the real defaults are (core/exclusions/defaults.ts): an app rule, a title rule,
+  // both at once, and a plain entry the user typed. Plain names here once hid how rules read.
+  exclusions: ["1Password::", "Messages::", "::online banking", "Slack::general", "Calendar"],
   excludedSites: ["mail.google.com", "web.whatsapp.com", "bank.example"],
   // 7, not 6: onboarding is over once its LAST step has been read, and 6 is that step being on
   // screen. A default of 6 would open every "after onboarding" scenario on the Done step.
@@ -144,6 +154,20 @@ export function scenarioStart(scenario: Scenario): Start {
     // Onboarding long finished, then signed out: the window is nothing but the sign-in until it is undone.
     case "signed-out":
       return {...base, status: status({blockers: ["SIGNED_OUT"]}), settings: settings()};
+    case "linux-onboarding-extension":
+      return {...base, ...onboarding(1, ["EXTENSION_MISSING", "NO_PERMISSION"]), permission: "denied"};
+    case "linux-onboarding-login":
+      return {...base, ...onboarding(1, ["EXTENSION_NEEDS_LOGIN", "NO_PERMISSION"]), permission: "denied"};
+    case "linux-onboarding-extensions-off":
+      return {...base, ...onboarding(1, ["EXTENSIONS_OFF_IN_GNOME", "NO_PERMISSION"]), permission: "denied"};
+    case "linux-onboarding-share":
+      return {...base, ...onboarding(1, ["NO_PERMISSION"]), permission: "denied"};
+    case "linux-signin":
+      return {...base, ...onboarding(1, ["SIGNED_OUT", "MODEL_MISSING", "EXTENSION_MISSING", "NO_PERMISSION"]), download: {kind: "missing"}, permission: "denied"};
+    case "linux-home-login":
+      return {...base, status: status({blockers: ["EXTENSION_NEEDS_LOGIN"]}), settings: settings()};
+    case "linux-settings":
+      return {...base, status: status(), settings: settings()};
   }
 }
 
@@ -247,6 +271,8 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
       return permission;
     },
     requestPermission: async () => {
+      // GNOME's Share dialog, answered: no restart on Linux.
+      if (isLinux(scenario)) { await wait(900); permission = "granted"; pushStatus({blockers: without("NO_PERMISSION")}); return; }
       permission = "needsRestart";
       pushStatus({blockers: [...without("NO_PERMISSION"), "PERMISSION_NEEDS_RESTART"]});
     },
@@ -281,12 +307,22 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
       pushDownload({kind: "partial", receivedBytes: received});
     },
     recentApp: async () => "Figma",
-    appInfo: async () => ({...APP_INFO, translocated: scenario === "onboarding-translocated"}),
+    appInfo: async () => ({...APP_INFO, translocated: scenario === "onboarding-translocated", platform: isLinux(scenario) ? "linux" : "mac"}),
     openWhatLeaves: async () => undefined,
     openLicences: async () => "LICENCES_MISSING",
     restartApp: async () => {
       permission = "granted";
       pushStatus({blockers: without("NO_PERMISSION", "PERMISSION_NEEDS_RESTART")});
+    },
+    // Linux's GNOME extension, played through: an install waits for a login, the login finishes it.
+    extension: async (action) => {
+      const extensionBlockers = ["EXTENSION_MISSING", "EXTENSION_OFF", "EXTENSIONS_OFF_IN_GNOME", "EXTENSION_NEEDS_LOGIN", "EXTENSION_UNSUPPORTED"] as const;
+      if (action === "install") { await wait(500); pushStatus({blockers: [...without(...extensionBlockers), "EXTENSION_NEEDS_LOGIN"]}); return "needsLogin"; }
+      if (action === "logOut") { await wait(700); pushStatus({blockers: without(...extensionBlockers)}); return "ready"; }
+      if (action === "remove") { pushStatus({blockers: [...without(...extensionBlockers), "EXTENSION_MISSING"]}); return "missing"; }
+      if (action === "enableAll") { await wait(400); pushStatus({blockers: without("EXTENSIONS_OFF_IN_GNOME")}); return "ready"; }
+      // `check`: whatever the blockers say now.
+      return engine.blockers.includes("EXTENSION_MISSING") ? "missing" : isLinux(scenario) ? "ready" : null;
     },
     onStatus: (cb) => { statusListeners.add(cb); return () => { statusListeners.delete(cb); }; },
     onDownload: (cb) => { downloadListeners.add(cb); return () => { downloadListeners.delete(cb); }; }

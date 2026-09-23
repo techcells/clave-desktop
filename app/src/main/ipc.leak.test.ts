@@ -63,7 +63,7 @@ describe("LEAK TEST (IPC): everything that can cross to the renderer", () => {
     // above with real arguments. Everything else is called here, `reject` and `signOut` included, and
     // every answer is inspected below.
     const skip = new Set(["signIn", "selfTest", "setCapture", "approve", "deleteAllData", "restartApp"]);
-    const args = (channel: string): unknown[] => (channel === "updateSettings" ? [{}] : channel === "retry" ? ["reader"] : channel === "reject" ? [id] : []);
+    const args = (channel: string): unknown[] => (channel === "updateSettings" ? [{}] : channel === "retry" ? ["reader"] : channel === "reject" ? [id] : channel === "extension" ? ["check"] : []);
     for (const channel of INVOKE_CHANNELS) if (!skip.has(channel)) crossed.push([channel, await router.handle(channel, args(channel))]);
     // `reject` took the one statement and `signOut` followed it: approving it now answers a plain
     // `false`, and the review screen is empty for a screen nobody is signed in to.

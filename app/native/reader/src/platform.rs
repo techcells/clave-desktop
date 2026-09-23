@@ -59,8 +59,9 @@ pub struct Captured<I> {
 /// and a guess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // Windows has no capture grant to refuse and no separate window-list query to come back empty, so
-// `Refused` and `NoContent` are only ever built by `macos::capture` (and by the tests).
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+// `Refused` and `NoContent` are only ever built by `macos::capture` (and by the tests). Linux has no
+// window-list query either, so it never builds `NoContent`.
+#[cfg_attr(any(target_os = "windows", target_os = "linux"), allow(dead_code))]
 pub enum CaptureError {
     /// The system refused the capture (`SCStreamErrorDomain` -3801): the Screen Recording grant is
     /// not in force for whatever app is responsible for this process.
@@ -116,4 +117,12 @@ pub trait Platform {
     /// nothing the app could do differently, and an error string from the recogniser is one more
     /// place a fragment of the user's screen could leak into a log.
     fn recognise(&self, captured: &Captured<Self::Image>) -> Result<Vec<Line>, ()>;
+
+    /// Keep the screen-share grant the app sent (protocol 3). Only Linux has one: the ScreenCast
+    /// portal's restore token. The default ignores it.
+    fn grant(&self, _token: &str) {}
+
+    /// Capture was switched off (protocol 3): give up whatever keeps the screen shared. Only Linux
+    /// holds anything (the ScreenCast session). The default does nothing.
+    fn release(&self) {}
 }

@@ -121,7 +121,8 @@ describe("paths", () => {
   it("lists every file, and deletion leaves only the model folder", () => {
     const paths = dataPaths("/data");
     expect(paths.pool).toBe("/data/pool.bin");
-    expect(deletablePaths(paths)).toHaveLength(7);
+    expect(deletablePaths(paths)).toHaveLength(8);
+    expect(deletablePaths(paths)).toContain(paths.screenGrant);
     expect(deletablePaths(paths)).not.toContain(paths.modelDir);
   });
 });

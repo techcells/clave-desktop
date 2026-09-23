@@ -13,8 +13,18 @@ import * as walkScript from "./walk.mjs";
 type Options = Record<string, unknown> & {appBundleId: string; name: string; executableName: string; appVersion: string; buildVersion: string; appCategoryType: string; appCopyright: string};
 type Entry = {rel: string; kind: string; mode?: number};
 type WinOptions = Record<string, unknown> & {name: string; executableName: string; appVersion: string; buildVersion: string; appCopyright: string; win32metadata: Record<string, string>};
+type LinuxOptions = Record<string, unknown> & {name: string; executableName: string; arch: string};
+type Model = {file: string; sha256: string};
 const {BUNDLE_IDS, PLIST_REMOVE, PLIST_SET, ASAR_UNPACK, ASAR_REQUIRED, ASAR_FORBIDDEN, UNPACKED_ROOTS, WIN_UNPACKED_ROOTS, bundleIdFor, copyrightFor, findElectronZip, packagerOptions, expectedPlist, checkBundle, plistAsObject, pgrepPattern,
-  windowsFileVersion, winPackagerOptions, expectedVersionInfo, checkWinBundle, versionInfoOf} = bundleScript as {
+  windowsFileVersion, winPackagerOptions, expectedVersionInfo, checkWinBundle, versionInfoOf,
+  linuxExecutableName, electronTargetFor, LINUX_UNPACKED_ROOTS, LINUX_ASAR_REQUIRED, linuxPackagerOptions, checkLinuxBundle, cacheFor} = bundleScript as {
+  linuxExecutableName: (flavour: string) => string | null;
+  electronTargetFor: (platform: string, arch?: string) => {platform: string; arch: string} | null;
+  LINUX_UNPACKED_ROOTS: Record<string, string[]>;
+  LINUX_ASAR_REQUIRED: string[];
+  linuxPackagerOptions: (a: Record<string, unknown>) => {options?: LinuxOptions; error?: string};
+  checkLinuxBundle: (a: {listing: Entry[]; asarFiles: string[]; unpacked: Entry[]; options: LinuxOptions; models: Model[]; modelHashes: Record<string, string | null>; rootMode: number}) => Array<{code: string; detail: string}>;
+  cacheFor: (platform: string, env: Record<string, string | undefined>, home: string) => string;
   WIN_UNPACKED_ROOTS: string[];
   windowsFileVersion: (version: unknown) => string | null;
   winPackagerOptions: (a: Record<string, unknown>) => {options?: WinOptions; error?: string};
@@ -31,7 +41,7 @@ const {BUNDLE_IDS, PLIST_REMOVE, PLIST_SET, ASAR_UNPACK, ASAR_REQUIRED, ASAR_FOR
   ASAR_UNPACK: {unpack: string; unpackDir: string};
   bundleIdFor: (flavour: string) => string | null;
   copyrightFor: (entity: unknown, buildNumber: unknown) => string | null;
-  findElectronZip: (candidates: string[], version: string, platform?: string) => string | null;
+  findElectronZip: (candidates: string[], version: string, platform?: string, arch?: string) => string | null;
   packagerOptions: (a: Record<string, unknown>) => {options?: Options; error?: string};
   expectedPlist: (options: Options) => Record<string, unknown>;
   checkBundle: (a: {listing: Entry[]; plist: Record<string, unknown>; asarFiles: string[]; unpacked: Entry[]; options: Options}) => Array<{code: string; detail: string}>;
@@ -248,6 +258,138 @@ describe("Windows: the app folder instead of the .app", () => {
   });
 });
 
+describe("Linux: an app folder per architecture, installed to /opt by the package", () => {
+  const MODELS: Model[] = [{file: "eng.traineddata", sha256: "a".repeat(64)}, {file: "por.traineddata", sha256: "b".repeat(64)}];
+
+  it("names the Linux executable in lower case without spaces, and never the dev flavour", () => {
+    expect(linuxExecutableName("internal")).toBe("clave-agent-internal");
+    expect(linuxExecutableName("release")).toBe("clave-agent");
+    expect(linuxExecutableName("dev")).toBeNull();
+    expect(linuxExecutableName("toString")).toBeNull();
+  });
+
+  it("chooses Electron's Linux build by architecture, x64 and arm64 only; the others by system alone", () => {
+    expect(electronTargetFor("linux", "x64")).toEqual({platform: "linux", arch: "x64"});
+    expect(electronTargetFor("linux", "arm64")).toEqual({platform: "linux", arch: "arm64"});
+    expect(electronTargetFor("linux")).toBeNull();
+    expect(electronTargetFor("linux", "ia32")).toBeNull();
+    expect(electronTargetFor("darwin", "x64")).toEqual({platform: "darwin", arch: "arm64"});
+    expect(electronTargetFor("win32")).toEqual({platform: "win32", arch: "x64"});
+    expect(electronTargetFor("freebsd", "x64")).toBeNull();
+  });
+
+  it("finds the Linux zip of that architecture only", () => {
+    const cands = ["/h/.cache/electron/a/electron-v44.4.1-linux-arm64.zip", "/h/.cache/electron/b/electron-v44.4.1-linux-x64.zip", "/h/electron-v44.4.1-darwin-arm64.zip"];
+    expect(findElectronZip(cands, "44.4.1", "linux", "arm64")).toBe("/h/.cache/electron/a/electron-v44.4.1-linux-arm64.zip");
+    expect(findElectronZip(cands, "44.4.1", "linux", "x64")).toBe("/h/.cache/electron/b/electron-v44.4.1-linux-x64.zip");
+    expect(findElectronZip(cands.slice(1), "44.4.1", "linux", "arm64")).toBeNull();
+    expect(findElectronZip(cands, "44.4.1", "linux")).toBeNull();
+    expect(findElectronZip(cands, "44.4.2", "linux", "x64")).toBeNull();
+  });
+
+  it("looks for the zip where @electron/get keeps it on Linux: XDG_CACHE_HOME, else ~/.cache", () => {
+    expect(cacheFor("linux", {}, "/home/u")).toBe("/home/u/.cache/electron");
+    expect(cacheFor("linux", {XDG_CACHE_HOME: "/x/cache"}, "/home/u")).toBe("/x/cache/electron");
+    // The macOS branch builds a path of the machine it runs on.
+    expect(cacheFor("darwin", {XDG_CACHE_HOME: "/x/cache"}, "/Users/u")).toBe(join("/Users/u", "Library", "Caches", "electron"));
+    expect(cacheFor("linux", {XDG_CACHE_HOME: ""}, "/home/u")).toBe("/home/u/.cache/electron");
+  });
+
+  it("builds the app folder with the lower-case executable, the same asar and licences, and nothing macOS or Windows", () => {
+    for (const arch of ["x64", "arm64"]) {
+      const r = linuxPackagerOptions({...ARGS, arch, iconPath: "/repo/app/build/icon.icns"});
+      expect(r.error, arch).toBeUndefined();
+      expect(r.options).toMatchObject({
+        dir: "/out/internal/staging/app", out: "/out/internal/bundle", name: "Clave Agent Internal", executableName: "clave-agent-internal",
+        platform: "linux", arch, appVersion: "0.1.0", buildVersion: "20260922.0800", electronVersion: "44.4.1", electronZipDir: "/cache/x",
+        overwrite: true, prune: false, derefSymlinks: true, asar: ASAR_UNPACK, appCopyright: "Copyright © 2026 Clave",
+        extraResource: ["/out/internal/staging/electron/LICENSE", "/out/internal/staging/electron/LICENSES.chromium.html"]
+      });
+      for (const key of ["appBundleId", "helperBundleId", "extendInfo", "appCategoryType", "darwinDarkModeSupport", "win32metadata", "icon", "asarIntegrityDigest"]) expect(r.options, key).not.toHaveProperty(key);
+    }
+    expect(linuxPackagerOptions({...ARGS, flavour: "release", info: {...INFO, flavour: "release", appName: "Clave Agent"}, arch: "x64"}).options?.executableName).toBe("clave-agent");
+  });
+
+  it("refuses what the other systems refuse, and an unknown architecture", () => {
+    expect(linuxPackagerOptions({...ARGS, arch: "x64", flavour: "dev", info: {...INFO, flavour: "dev"}})).toEqual({error: "DEV_FLAVOUR_NOT_PACKAGED"});
+    expect(linuxPackagerOptions({...ARGS, arch: "x64", flavour: "release"})).toEqual({error: "STAGING_FLAVOUR_MISMATCH"});
+    expect(linuxPackagerOptions({...ARGS, arch: "x64", entity: " "})).toEqual({error: "COPYRIGHT_ENTITY_MISSING"});
+    expect(linuxPackagerOptions({...ARGS, arch: "x64", electronVersion: "latest"})).toEqual({error: "ELECTRON_VERSION_UNKNOWN"});
+    expect(linuxPackagerOptions({...ARGS, arch: "x64", info: {...INFO, buildNumber: undefined}})).toEqual({error: "STAGING_INCOMPLETE"});
+    expect(linuxPackagerOptions({...ARGS, arch: "ia32"})).toEqual({error: "UNSUPPORTED_ARCH"});
+    expect(linuxPackagerOptions({...ARGS})).toEqual({error: "UNSUPPORTED_ARCH"});
+    expect(linuxPackagerOptions({...ARGS, arch: "toString"})).toEqual({error: "UNSUPPORTED_ARCH"});
+    // arm64 is internal only (decision 3): the VM's build, never a release.
+    const release = {...ARGS, flavour: "release", info: {...INFO, flavour: "release", appName: "Clave Agent"}};
+    expect(linuxPackagerOptions({...release, arch: "arm64"})).toEqual({error: "ARM64_IS_INTERNAL_ONLY"});
+    expect(linuxPackagerOptions({...release, arch: "x64"}).error).toBeUndefined();
+  });
+
+  it("pins the unpacked roots per architecture and the extension the asar must carry", () => {
+    expect(LINUX_UNPACKED_ROOTS).toEqual({
+      x64: ["node_modules/node-llama-cpp", "node_modules/@node-llama-cpp/linux-x64", "node_modules/@node-llama-cpp/linux-x64-vulkan"],
+      arm64: ["node_modules/node-llama-cpp", "node_modules/@node-llama-cpp/linux-arm64"]
+    });
+    expect(LINUX_ASAR_REQUIRED).toEqual([...ASAR_REQUIRED, "/dist/gnome-extension/extension.js", "/dist/gnome-extension/logic.js", "/dist/gnome-extension/metadata.json"]);
+  });
+
+  function goodLinuxBundle(arch = "arm64") {
+    const options = linuxPackagerOptions({...ARGS, arch}).options as LinuxOptions;
+    const file = (rel: string, mode = 0o100644): Entry => ({rel, kind: "file", mode});
+    const dir = (rel: string): Entry => ({rel, kind: "dir", mode: 0o40755});
+    const listing: Entry[] = [file("clave-agent-internal", 0o100755), file("clave-reader", 0o100755), file("chrome-sandbox", 0o100755), file("libffmpeg.so", 0o100755),
+      dir("locales"), file("locales/en-US.pak"), dir("resources"), file("resources/app.asar"), file("resources/LICENSE"), file("resources/LICENSES.chromium.html"),
+      dir("resources/app.asar.unpacked"), dir("tessdata"), file("tessdata/eng.traineddata"), file("tessdata/por.traineddata")];
+    const asarFiles = [...LINUX_ASAR_REQUIRED, "/dist/renderer/main.css"];
+    const roots = LINUX_UNPACKED_ROOTS[arch];
+    const unpacked: Entry[] = [dir("node_modules"), ...roots.map(dir), ...roots.slice(1).map((root) => file(`${root}/bins/x/llama-addon.node`)),
+      file("node_modules/node-llama-cpp/dist/index.js"), file(`node_modules/@reflink/reflink-linux-${arch}-gnu/reflink.linux-${arch}-gnu.node`)];
+    const modelHashes = Object.fromEntries(MODELS.map((m) => [m.file, m.sha256]));
+    return {listing, asarFiles, unpacked, options, models: MODELS, modelHashes, rootMode: 0o40755};
+  }
+
+  it("passes an app folder with everything in its place, for both architectures", () => {
+    expect(checkLinuxBundle(goodLinuxBundle("arm64"))).toEqual([]);
+    expect(checkLinuxBundle(goodLinuxBundle("x64"))).toEqual([]);
+  });
+
+  it("names each defect", () => {
+    const g = goodLinuxBundle();
+    const codes = (b: ReturnType<typeof goodLinuxBundle>) => checkLinuxBundle(b).map((p) => `${p.code} ${p.detail}`);
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "clave-reader")})).toContain("HELPER_MISSING clave-reader");
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "clave-reader" ? {...e, mode: 0o100644} : e))})).toContain("HELPER_NOT_EXECUTABLE clave-reader");
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "clave-agent-internal" ? {...e, mode: 0o100644} : e))})).toContain("EXECUTABLE_MISSING clave-agent-internal");
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "clave-agent-internal")})).toContain("EXECUTABLE_MISSING clave-agent-internal");
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "resources/LICENSES.chromium.html")})).toContain("BUNDLE_FILE_MISSING resources/LICENSES.chromium.html");
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "resources/app.asar")})).toContain("BUNDLE_FILE_MISSING resources/app.asar");
+    expect(codes({...g, listing: [...g.listing, {rel: "resources/app", kind: "dir", mode: 0o40755}]})).toContain("UNPACKED_APP_FOLDER resources/app");
+    expect(codes({...g, listing: [...g.listing, {rel: "lib/link.so", kind: "symlink"}]})).toContain("SYMLINK_IN_BUNDLE lib/link.so");
+    expect(codes({...g, listing: [...g.listing, {rel: "main.js.map", kind: "file", mode: 0o100644}]})).toContain("FORBIDDEN_FILE main.js.map");
+    // No setuid or setgid file ever: Electron's sandbox runs on user namespaces (the AppArmor profile on Ubuntu), never a root helper.
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "chrome-sandbox" ? {...e, mode: 0o104755} : e))})).toContain("SETUID_FILE chrome-sandbox");
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "clave-reader" ? {...e, mode: 0o102755} : e))})).toContain("SETUID_FILE clave-reader");
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "tessdata/por.traineddata")})).toContain("MODEL_MISSING por.traineddata");
+    expect(codes({...g, modelHashes: {...g.modelHashes, "eng.traineddata": "c".repeat(64)}})).toContain("MODEL_HASH_WRONG eng.traineddata");
+    expect(codes({...g, modelHashes: {...g.modelHashes, "eng.traineddata": null}})).toContain("MODEL_HASH_WRONG eng.traineddata");
+    expect(codes({...g, models: []})).toContain("MODELS_UNLISTED tessdata");
+    expect(codes({...g, listing: [...g.listing, {rel: "tessdata/deu.traineddata", kind: "file", mode: 0o100644}]})).toContain("MODEL_UNEXPECTED tessdata/deu.traineddata");
+    // Installed under /opt by root, the folder must still be readable by every user: packager leaves its output folder 0700.
+    expect(codes({...g, rootMode: 0o40700})).toContain("NOT_READABLE_BY_USERS .");
+    expect(codes({...g, rootMode: 0o40754})).toContain("NOT_READABLE_BY_USERS .");
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "locales" ? {...e, mode: 0o40744} : e))})).toContain("NOT_READABLE_BY_USERS locales");
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "locales" ? {...e, mode: 0o40644} : e))})).toContain("NOT_READABLE_BY_USERS locales");
+    expect(codes({...g, listing: g.listing.filter((e) => e.rel !== "resources/LICENSE")})).toContain("BUNDLE_FILE_MISSING resources/LICENSE");
+    expect(codes({...g, listing: [...g.listing, {rel: "tessdata/extra", kind: "dir", mode: 0o40755}]})).toContain("MODEL_UNEXPECTED tessdata/extra");
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "locales" ? {...e, mode: 0o40750} : e))})).toContain("NOT_READABLE_BY_USERS locales");
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "resources/app.asar" ? {...e, mode: 0o100640} : e))})).toContain("NOT_READABLE_BY_USERS resources/app.asar");
+    expect(codes({...g, listing: g.listing.map((e) => (e.rel === "clave-reader" ? {...e, mode: 0o100754} : e))})).toContain("NOT_READABLE_BY_USERS clave-reader");
+    expect(codes({...g, asarFiles: g.asarFiles.filter((f) => f !== "/dist/gnome-extension/logic.js")})).toContain("ASAR_FILE_MISSING /dist/gnome-extension/logic.js");
+    expect(codes({...g, asarFiles: [...g.asarFiles, "/dist/native/clave-reader"]})).toContain("ASAR_FORBIDDEN_FILE /dist/native/clave-reader");
+    expect(codes({...g, unpacked: g.unpacked.filter((e) => e.rel !== "node_modules/@node-llama-cpp/linux-arm64")})).toContain("UNPACKED_ROOT_MISSING node_modules/@node-llama-cpp/linux-arm64");
+    expect(codes({...g, unpacked: [...g.unpacked, {rel: "node_modules/x/y.js", kind: "file"}]})).toContain("UNPACKED_STRAY_FILE node_modules/x/y.js");
+  });
+});
+
 describe("a real bundle, when one exists", () => {
   const outDir = join(fileURLToPath(new URL("../..", import.meta.url)), "out");
   const reports = existsSync(outDir) ? readdirSync(outDir).map((f) => join(outDir, f, "bundle", "bundle-report.json")).filter((p) => existsSync(p)) : [];
@@ -258,6 +400,24 @@ describe("a real bundle, when one exists", () => {
     const info = {flavour: report.flavour, appName: report.appName, version: report.version, buildNumber: report.buildNumber};
     const req = createRequire(import.meta.url);
     const loadAsar = async () => await import(pathToFileURL(createRequire(req.resolve("@electron/packager")).resolve("@electron/asar")).href) as {listPackage: (p: string, o: {isPack: boolean}) => string[]};
+    if (report.platform === "linux") {
+      const {arch, models} = JSON.parse(readFileSync(reportPath, "utf8")) as {arch: string; models: Model[]};
+      const options = linuxPackagerOptions({flavour: report.flavour, info, stagingDir: join(outDir, report.flavour, "staging"), outDir: join(outDir, report.flavour, "bundle"), electronVersion: report.electronVersion, entity: "Clave", arch}).options as LinuxOptions;
+      const asar = await loadAsar();
+      const unpackedPath = join(appPath, "resources", "app.asar.unpacked");
+      const {createHash} = await import("node:crypto");
+      const modelHashes = Object.fromEntries(models.map((m) => [m.file, createHash("sha256").update(readFileSync(join(appPath, "tessdata", m.file))).digest("hex")]));
+      expect(checkLinuxBundle({
+        listing: walk(appPath).map((e) => ({...e, mode: e.kind === "symlink" ? 0 : statSync(join(appPath, e.rel)).mode})),
+        asarFiles: asar.listPackage(join(appPath, "resources", "app.asar"), {isPack: false}),
+        unpacked: existsSync(unpackedPath) ? walk(unpackedPath) : [], options, models, modelHashes, rootMode: statSync(appPath).mode
+      })).toEqual([]);
+      // Literal values, not derived from the function that asked for them: the executable's name, and the
+      // helper byte for byte as staged (Linux builds are never signed).
+      expect(existsSync(join(appPath, report.flavour === "internal" ? "clave-agent-internal" : "clave-agent"))).toBe(true);
+      expect(readFileSync(join(appPath, "clave-reader")).equals(readFileSync(join(outDir, report.flavour, "staging", "helper", "clave-reader")))).toBe(true);
+      return;
+    }
     if (report.platform === "win32") {
       const options = winPackagerOptions({flavour: report.flavour, info, stagingDir: join(outDir, report.flavour, "staging"), outDir: join(outDir, report.flavour, "bundle"), electronVersion: report.electronVersion, entity: "Clave"}).options as WinOptions;
       const asar = await loadAsar();

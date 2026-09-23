@@ -31,6 +31,14 @@ export function createRealReader(deps: {
   exists: (path: string) => boolean;
   spawnChild: (path: string) => ChildProcessWithoutNullStreams;
   now: () => number;
+  /** Protocol 3: a fresh screen-share grant from the helper, to be kept in place of the spent one. */
+  onGrant?: (token: string) => void;
+  /** Protocol 4 (Linux): the GNOME extension started or stopped refusing the helper. */
+  onExtension?: (refused: boolean) => void;
+  /** Protocol 5 (Linux): the user stopped the screen share; the kept grant must go. */
+  onShareStopped?: () => void;
+  /** False on Linux, where a helper's `denied` is live and never worth a fresh helper (see readerClient). */
+  deniedMayBeStale?: boolean;
 }): RealReader {
   if (!deps.exists(deps.helperPath)) throw new Error("READER_HELPER_MISSING");
   let sink: {noteReaderEvent(event: ReaderClientEvent): void} | null = null;
@@ -38,6 +46,10 @@ export function createRealReader(deps: {
   const reader = createReaderClient({
     spawn: () => createChildHelperLink(() => deps.spawnChild(deps.helperPath)),
     now: deps.now,
+    ...(deps.onGrant ? {onGrant: deps.onGrant} : {}),
+    ...(deps.onExtension ? {onExtension: deps.onExtension} : {}),
+    ...(deps.onShareStopped ? {onShareStopped: deps.onShareStopped} : {}),
+    ...(deps.deniedMayBeStale === undefined ? {} : {deniedMayBeStale: deps.deniedMayBeStale}),
     onEvent: (event) => {
       if (sink) sink.noteReaderEvent(event);
       else if (early.length < EARLY_EVENTS_MAX) early.push(event);

@@ -1,4 +1,4 @@
-//! Protocol version 2: one JSON object per line, in and out.
+//! Protocol version 3: one JSON object per line, in and out.
 //!
 //! The TypeScript side of this conversation already exists and is tested, so every shape here is
 //! fixed. The parser's contract is deliberately forgiving in one direction only: anything it does
@@ -31,6 +31,25 @@
 //! not send one reaches a newer main as `failed` with no detail, which that main tallies as
 //! `failedUnknown`. Neither side is worse off than before, which is what "additive" has to mean
 //! before a version number is allowed to stay where it is.
+//!
+//! What 3 added over 2 (the Linux plan, Task 3): the `grant` op, carrying the screen-share grant the
+//! app keeps (Linux: the ScreenCast portal's restore token), the `release` op, sent when capture is
+//! switched off, and the `grant` event, carrying the fresh token every session start returns. The
+//! number moved because the app treats a line it cannot read as a failure of every call in flight,
+//! so a helper that sent `grant` to an app that did not know it would break reads; the other
+//! direction is harmless (a helper ignores an op it does not know). macOS and Windows helpers speak
+//! 3 too and simply never send `grant`.
+//!
+//! What 4 added over 3 (the Linux plan, Task 7 review I2): the `extension` event, `{"refused": bool}`,
+//! sent by the Linux helper when the GNOME extension starts or stops refusing it, so the app can
+//! restart the helper or ask for a new login instead of reading nothing with no blocker shown. The
+//! number moved for the same reason as 3's. macOS and Windows helpers never send it.
+//!
+//! What 5 added over 4 (the Linux plan, Task 8's live finding): the `shareStopped` event, sent by the
+//! Linux helper when the screen share ends without it asking (the user pressed Stop on GNOME's
+//! indicator, or refused the Share dialog), once per refusal. GNOME still honours the restore token
+//! after a Stop, so the app must drop the one it keeps, or any new helper handed it reopens the share
+//! with no dialog. The number moved for the same reason as 3's. macOS and Windows helpers never send it.
 
 use serde_json::{Value, json};
 
@@ -38,7 +57,7 @@ use crate::platform::WindowInfo;
 use crate::scheduler::{FailDetail, FailReason, LineBox, ReadAnswer, ReadGeometry, ReadStats};
 
 /// The protocol version announced in the `ready` event.
-pub const PROTOCOL_VERSION: u64 = 2;
+pub const PROTOCOL_VERSION: u64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {
@@ -83,6 +102,14 @@ pub enum Request {
     Read { id: u64, budget_ms: u64, expect: Option<Expected>, lines: bool },
     Cancel { target: u64 },
     Shutdown,
+    /// Protocol 3. The screen-share grant the app keeps for this helper (Linux: the ScreenCast
+    /// portal's restore token). No id: it is not a question. Other platforms ignore it.
+    Grant { token: String },
+    /// Protocol 3. Capture was switched off: give up whatever keeps the screen shared (Linux: close
+    /// the ScreenCast session, which turns GNOME's sharing indicator off), and open none quietly
+    /// until the next `grant`, which the app sends when capture is switched on. Other platforms
+    /// ignore it.
+    Release,
 }
 
 /// Parse one line from the app, or `None` if there is nothing here worth answering.
@@ -98,6 +125,8 @@ pub fn parse_request(line: &str) -> Option<Request> {
     match op {
         // `shutdown` carries no id: it is not a question, and there is nobody left to answer.
         "shutdown" => Some(Request::Shutdown),
+        "grant" => Some(Request::Grant { token: object.get("token")?.as_str()?.to_owned() }),
+        "release" => Some(Request::Release),
         "cancel" => Some(Request::Cancel { target: non_negative_integer(object.get("target"))? }),
         "permission" => Some(Request::Permission { id: non_negative_integer(object.get("id"))? }),
         "requestPermission" => Some(Request::RequestPermission { id: non_negative_integer(object.get("id"))? }),
@@ -154,6 +183,26 @@ fn non_negative_integer(value: Option<&Value>) -> Option<u64> {
 
 pub fn ready_line() -> String {
     json!({"event": "ready", "protocol": PROTOCOL_VERSION}).to_string()
+}
+
+/// Protocol 3: a new screen-share grant for the app to keep (Linux: the restore token a session
+/// start returned; the one the app holds is spent). The token is not screen content and is the only
+/// thing on the line.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn grant_line(token: &str) -> String {
+    json!({"event": "grant", "token": token}).to_string()
+}
+
+/// Protocol 4: whether the GNOME extension refuses this helper (Linux). A fixed boolean, nothing else.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn extension_line(refused: bool) -> String {
+    json!({"event": "extension", "refused": refused}).to_string()
+}
+
+/// Protocol 5: the screen share ended without the helper asking (Linux). Nothing else is in it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn share_stopped_line() -> String {
+    json!({"event": "shareStopped"}).to_string()
 }
 
 pub fn focus_line() -> String {
@@ -577,9 +626,11 @@ mod tests {
 
     #[test]
     fn the_ready_event_announces_the_protocol() {
-        // 2, not 1. An app that enforces the approved window must be able to tell a helper that
-        // does from one that does not, and this line is the only place it can.
-        assert_eq!(ready_line(), r#"{"event":"ready","protocol":2}"#);
+        // 5, not 4 (and 4 was not 3). An app must be able to tell a helper that speaks what it
+        // speaks from one that does not — the approved window since 2, the screen-share grant since
+        // 3, the extension event since 4, the shareStopped event since 5 — and this line is the only
+        // place it can.
+        assert_eq!(ready_line(), r#"{"event":"ready","protocol":5}"#);
     }
 
     #[test]
@@ -602,6 +653,36 @@ mod tests {
     #[test]
     fn no_front_window_is_an_explicit_null() {
         assert_eq!(front_window_line(3, None), r#"{"id":3,"window":null}"#);
+    }
+
+    #[test]
+    fn grant_and_release_are_read_and_need_no_id() {
+        assert_eq!(parse_request(r#"{"op":"grant","token":"0e5a-3c2d"}"#), Some(Request::Grant { token: "0e5a-3c2d".into() }));
+        assert_eq!(parse_request(r#"{"op":"release"}"#), Some(Request::Release));
+        assert_eq!(parse_request(r#"{"op":"release","id":4}"#), Some(Request::Release));
+    }
+
+    #[test]
+    fn a_grant_without_a_string_token_is_ignored() {
+        for line in [r#"{"op":"grant"}"#, r#"{"op":"grant","token":7}"#, r#"{"op":"grant","token":null}"#] {
+            assert_eq!(parse_request(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_grant_event_carries_the_token_and_nothing_else() {
+        assert_eq!(grant_line("0e5a-3c2d"), r#"{"event":"grant","token":"0e5a-3c2d"}"#);
+    }
+
+    #[test]
+    fn an_extension_event_says_refused_or_not_and_nothing_else() {
+        assert_eq!(extension_line(true), r#"{"event":"extension","refused":true}"#);
+        assert_eq!(extension_line(false), r#"{"event":"extension","refused":false}"#);
+    }
+
+    #[test]
+    fn the_share_stopped_event_carries_nothing_else() {
+        assert_eq!(share_stopped_line(), r#"{"event":"shareStopped"}"#);
     }
 
     #[test]

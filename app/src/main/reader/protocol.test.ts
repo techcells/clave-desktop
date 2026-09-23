@@ -64,3 +64,37 @@ describe("reader protocol: the helper's permission answer", () => {
     expect(parseHelperPermission({})).toBeNull();
   });
 });
+
+describe("reader protocol 3: the screen-share grant", () => {
+  it("puts grant and release on the wire", () => {
+    expect(encode({op: "grant", token: "0e5a3c2d-8f1b"})).toBe('{"op":"grant","token":"0e5a3c2d-8f1b"}');
+    expect(encode({op: "release"})).toBe('{"op":"release"}');
+  });
+
+  it("reads a grant event carrying a plausible token", () => {
+    expect(parseLine('{"event":"grant","token":"0e5a3c2d-8f1b-4d6e-9a7c-2b4f6e8a0c1d"}'))
+      .toEqual({kind: "grant", token: "0e5a3c2d-8f1b-4d6e-9a7c-2b4f6e8a0c1d"});
+    expect(parseLine(`{"event":"grant","token":"${"a".repeat(128)}"}`)).toEqual({kind: "grant", token: "a".repeat(128)});
+  });
+
+  it("carries a grant event whose token is missing or implausible as no token, to be ignored rather than fail anything", () => {
+    for (const token of ["", " ", "a b", "tok\"en", "é", "a/b", "a".repeat(129)]) {
+      expect(parseLine(JSON.stringify({event: "grant", token})), JSON.stringify(token)).toEqual({kind: "grant", token: null});
+    }
+    expect(parseLine('{"event":"grant"}')).toEqual({kind: "grant", token: null});
+    expect(parseLine('{"event":"grant","token":7}')).toEqual({kind: "grant", token: null});
+  });
+
+  it("reads protocol 4's extension event: refused or not, and nothing else passes as one", () => {
+    expect(parseLine('{"event":"extension","refused":true}')).toEqual({kind: "extension", refused: true});
+    expect(parseLine('{"event":"extension","refused":false}')).toEqual({kind: "extension", refused: false});
+    for (const bad of ['{"event":"extension"}', '{"event":"extension","refused":"yes"}', '{"event":"extension","refused":1}']) {
+      expect(parseLine(bad), bad).toBeNull();
+    }
+  });
+
+  it("reads protocol 5's shareStopped event: the user ended the screen share (Linux)", () => {
+    expect(parseLine('{"event":"shareStopped"}')).toEqual({kind: "shareStopped"});
+    expect(parseLine('{"event":"sharestopped"}')).toBeNull();
+  });
+});

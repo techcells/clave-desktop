@@ -85,6 +85,12 @@ cpSync(whatLeaves, join(out, "WHAT-LEAVES.md"));
 // The tray icon. macOS draws the tray as text (●/○/!) and never loads it; Windows has no tray text,
 // and a tray with no image there is an invisible one.
 cpSync(join(app, "build/icon-preview.png"), join(out, "tray.png"));
+// Linux: the GNOME extension the app installs for its reader (`src/shell/gnomeExtension.ts`), its
+// three files only (never its tests), from the one place they are written.
+if (process.platform === "linux") {
+  mkdirSync(join(out, "gnome-extension"), {recursive: true});
+  for (const name of ["extension.js", "logic.js", "metadata.json"]) cpSync(join(app, "linux/gnome-extension", name), join(out, "gnome-extension", name));
+}
 // What this dist IS, for the staging step (which refuses a dist built for another flavour) and for
 // About. The version is the app's own from package.json; the build number is the UTC minute.
 const version = JSON.parse(readFileSync(join(app, "package.json"), "utf8")).version;

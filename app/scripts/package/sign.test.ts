@@ -18,7 +18,8 @@ const {FUSE_TABLE, fuseConfig, checkFuseWire, ENTITLEMENT_LEVELS, FORBIDDEN_ENTI
   FORBIDDEN_ENTITLEMENTS: string[];
   entitlementsFor: (path: string, level: number, appName: string, opts?: {teamId?: boolean}) => string[];
 };
-const {parseIdentities, isDeveloperId, identityDecision, parseSignArgs, signOptions, checkEntitlements} = sign as {
+const {parseIdentities, isDeveloperId, identityDecision, parseSignArgs, signOptions, checkEntitlements, linuxSignDecision} = sign as {
+  linuxSignDecision: (a: {flavour: string; requested: unknown; levelGiven: boolean}) => {skip?: boolean; error?: string};
   parseIdentities: (text: string) => Array<{name: string; trusted: boolean}>;
   isDeveloperId: (name: unknown) => boolean;
   identityDecision: (a: {flavour: string; requested: unknown; identities: Array<{name: string; trusted: boolean}>}) => {identity?: string; developerId?: boolean; skip?: boolean; error?: string};
@@ -44,6 +45,10 @@ describe("the fuse table and its config", () => {
 
   it("sets the same fuses on Windows, with no macOS signature to redo there", () => {
     expect(fuseConfig(OPTIONS, VERSION, "win32")).toEqual({version: "1", strictlyRequireAllFuses: true, resetAdHocDarwinSignature: false, 0: false, 1: true, 2: false, 3: false, 4: true, 5: true, 6: false, 7: true, 8: true});
+  });
+
+  it("sets the same fuses on Linux, with no macOS signature to redo there", () => {
+    expect(fuseConfig(OPTIONS, VERSION, "linux")).toEqual({version: "1", strictlyRequireAllFuses: true, resetAdHocDarwinSignature: false, 0: false, 1: true, 2: false, 3: false, 4: true, 5: true, 6: false, 7: true, 8: true});
   });
 
   it("refuses a fuse the tool knows and the table does not, and a table entry the tool does not know", () => {
@@ -207,6 +212,22 @@ describe("parseSignArgs and signOptions", () => {
   });
 });
 
+describe("linuxSignDecision: Linux builds are fused and never signed", () => {
+  it("fuses both packaged flavours unsigned: on Linux the published checksums are the integrity check", () => {
+    expect(linuxSignDecision({flavour: "internal", requested: null, levelGiven: false})).toEqual({skip: true});
+    expect(linuxSignDecision({flavour: "release", requested: null, levelGiven: false})).toEqual({skip: true});
+  });
+
+  it("refuses --sign and --level rather than ignore them, and any other flavour", () => {
+    expect(linuxSignDecision({flavour: "release", requested: "Clave Agent Dev", levelGiven: false})).toEqual({error: "LINUX_HAS_NO_SIGNING"});
+    expect(linuxSignDecision({flavour: "internal", requested: "x", levelGiven: false})).toEqual({error: "LINUX_HAS_NO_SIGNING"});
+    expect(linuxSignDecision({flavour: "internal", requested: "", levelGiven: false})).toEqual({error: "LINUX_HAS_NO_SIGNING"});
+    // Any --level, 0 included: there is no entitlement ladder on Linux to choose a rung of.
+    expect(linuxSignDecision({flavour: "internal", requested: null, levelGiven: true})).toEqual({error: "LINUX_HAS_NO_SIGNING"});
+    expect(linuxSignDecision({flavour: "dev", requested: null, levelGiven: false})).toEqual({error: "BAD_FLAVOUR"});
+  });
+});
+
 describe("a real bundle's hardening, when one exists", () => {
   const outDir = join(fileURLToPath(new URL("../..", import.meta.url)), "out");
   const reports = existsSync(outDir) ? readdirSync(outDir).map((f) => join(outDir, f, "bundle", "bundle-report.json")).filter((p) => existsSync(p)) : [];
@@ -216,9 +237,11 @@ describe("a real bundle's hardening, when one exists", () => {
     if (report.fused) {
       const fuses = await import("@electron/fuses") as unknown as {getCurrentFuseWire: (p: string) => Promise<Record<number, number>>; FuseV1Options: Enum; FuseState: {ENABLE: number; DISABLE: number}};
       // The wire lives in the .app on macOS and in the app's own .exe on Windows.
-      const wire = await fuses.getCurrentFuseWire(report.platform === "win32" ? join(appPath, report.executable ?? `${report.appName}.exe`) : appPath);
+      // And in the app's own executable on Linux too.
+      const wire = await fuses.getCurrentFuseWire(report.platform === "win32" ? join(appPath, report.executable ?? `${report.appName}.exe`) : report.platform === "linux" ? join(appPath, report.executable ?? "") : appPath);
       expect(checkFuseWire(wire, fuses.FuseV1Options, fuses.FuseState)).toEqual([]);
     }
+    if (report.platform === "linux") expect(report.signed).toBe(false);
     if (report.signed) {
       expect(spawnSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath]).status).toBe(0);
       // codesign -dvv writes its description to stderr.

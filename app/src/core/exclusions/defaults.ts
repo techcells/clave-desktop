@@ -17,6 +17,9 @@ export const DEFAULT_EXCLUSIONS = [
   "1Password::", "Bitwarden::", "LastPass::", "Dashlane::", "KeePassXC::", "Keychain Access::", "Passwords::",
   // Windows: classic KeePass, and Windows' own password store (opened in a Control Panel window).
   "KeePass::", "::Credential Manager",
+  // Linux: GNOME's password store (Seahorse), as the Linux reader names it (L7, 2026-09-23). Its own
+  // entry, so it does not depend on macOS's "Passwords" staying in the list.
+  "Passwords and Keys::",
   "Telegram::", "WhatsApp::", "Messages::", "Signal::",
   // Windows: Phone Link shows the phone's text messages, as Messages does on macOS.
   "Phone Link::",
@@ -57,12 +60,20 @@ export const BROWSERS = [
  * Windows reader marks a Chrome it cannot show to be English as `bandWithheld`
  * (`app/native/reader/src/win/chrome.rs`), and `before` refuses that window before it is captured.
  *
+ * Linux (L7, 2026-09-23): Chrome's .deb as `google-chrome.desktop`, English only by the same rule
+ * (`linux/chrome.rs` reads the language Chrome hands its child processes); and Firefox as the Ubuntu
+ * snap, `firefox_firefox.desktop`. Firefox marks a private window only in its translated title, so
+ * the Linux reader marks every Firefox window whose title is not a normal window's as `bandWithheld`
+ * (`linux/firefox.rs`). Chrome's other channels and Mozilla's .deb (`firefox.desktop`) were not
+ * measured and are not read.
+ *
  * `null` stands for a window that names no bundle id, which only the stand-in reader sends. The two
  * names that were read by name alone before bundle ids mattered keep that; a name measured since is
  * read only with its id, because without one nothing says which system's browser it is.
  */
 export const MEASURED_BROWSERS: Readonly<Record<string, readonly (string | null)[]>> = {
-  "google chrome": ["com.google.Chrome", null, "chrome.exe"],
+  "google chrome": ["com.google.Chrome", null, "chrome.exe", "google-chrome.desktop"],
   "safari": ["com.apple.Safari", null],
-  "microsoft edge": ["msedge.exe"]
+  "microsoft edge": ["msedge.exe"],
+  "firefox": ["firefox_firefox.desktop"]
 };

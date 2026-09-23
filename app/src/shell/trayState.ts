@@ -26,7 +26,13 @@ export const BLOCKER_TRAY: Record<Blocker, "problem" | "off"> = {
   SETTINGS_NEED_REVIEW: "problem",
   NO_TAXONOMY: "off",
   MODEL_MISSING: "off",
-  SELF_TEST_NEEDED: "off"
+  SELF_TEST_NEEDED: "off",
+  // Linux: each needs the user (install, a login, GNOME's own switch), so each is a problem.
+  EXTENSION_MISSING: "problem",
+  EXTENSION_OFF: "problem",
+  EXTENSIONS_OFF_IN_GNOME: "problem",
+  EXTENSION_NEEDS_LOGIN: "problem",
+  EXTENSION_UNSUPPORTED: "problem"
 };
 
 /**

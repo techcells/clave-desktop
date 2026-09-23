@@ -1,0 +1,7 @@
+{
+  "uuid": "clave-focus@clave.dev",
+  "name": "Clave focus",
+  "description": "Tells the Clave reader which window is focused and where it is, and nobody else.",
+  "shell-version": ["46"],
+  "version": 1
+}

@@ -5,6 +5,13 @@ import {COPY, NOTHING_READ} from "../copy";
 export const STEPS = ["pitch", "signIn", "model", "permission", "neverRead", "reviewTime", "done"] as const;
 export type Step = typeof STEPS[number];
 
+/** Linux: the GNOME extension's blockers, each a stage of the screen-sharing step. */
+export const EXTENSION_BLOCKERS: readonly Blocker[] = ["EXTENSION_MISSING", "EXTENSION_OFF", "EXTENSIONS_OFF_IN_GNOME", "EXTENSION_NEEDS_LOGIN", "EXTENSION_UNSUPPORTED"];
+
+/** Linux: the extension blocker the screen-sharing step's first stage is about, or null when that stage is done. */
+export const extensionProblem = (blockers: readonly Blocker[]): Blocker | null =>
+  blockers.find((blocker) => EXTENSION_BLOCKERS.includes(blocker)) ?? null;
+
 /**
  * Which onboarding step to show. Steps that the machine can verify (signed in, model ready and
  * checked, permission) are decided by the real state, not by a stored number, so onboarding
@@ -28,7 +35,9 @@ export function onboardingStep(status: EngineStatus, settings: UserSettings): St
   if (has("SIGNED_OUT")) return "signIn";
   if (has("MODEL_MISSING") || has("SELF_TEST_NEEDED")) return "model";
   // Not answered yet counts as not granted here: a step the machine has not verified is never skipped.
-  if (has("NO_PERMISSION") || has("PERMISSION_NEEDS_RESTART") || status.checkingPermission) return "permission";
+  // On Linux the GNOME extension is the first stage of the same step (the share is the second), so a
+  // step count stays the same everywhere and a logout resumes at the right stage by itself.
+  if (has("NO_PERMISSION") || has("PERMISSION_NEEDS_RESTART") || status.checkingPermission || EXTENSION_BLOCKERS.some(has)) return "permission";
   if (seen < 5) return "neverRead";
   if (seen < 6) return "reviewTime";
   return "done";

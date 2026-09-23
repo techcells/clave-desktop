@@ -41,7 +41,8 @@ coverage/
 *.provisionprofile
 
 # Internal docs (plans, handoff notes, specs, reviews); tracked: the public what-leaves page and the
-# Windows to-do list
+# Windows and Linux to-do lists
 docs/*
 !docs/WHAT-LEAVES.md
 !docs/WINDOWS-TODO.md
+!docs/LINUX-TODO.md

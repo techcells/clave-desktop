@@ -354,6 +354,39 @@ body {
   color: var(--accent);
 }
 
+/* Linux's screen-sharing step: two stages kept like two lines in the ledger, ruled above and below,
+   numbered in the clerk's hand, each with the machine's word for where it stands (DONE / NOW / NEXT)
+   set flush right in the margin voice. Only the line in hand opens, and what opens under it is
+   indented to the name, as the detail of an entry is — never a box. The line in hand is the only one
+   that takes the accent, the same device as the spine's long tick; a finished line keeps its ink but
+   steps back a shade, and the next line waits in the quietest text colour (never the rule colour:
+   it is text, and has to be readable, 4.5:1). */
+.stages { list-style: none; margin: 0 0 var(--gap); padding: 0; border-top: 1px solid var(--rule); }
+.stage {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: baseline;
+  padding: 12px 0 13px;
+  border-bottom: 1px solid var(--rule);
+}
+.stage-number { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em; color: var(--ink-3); }
+.stage-name { font-family: var(--serif); font-size: 15.5px; line-height: 1.3; color: var(--ink-3); }
+.stage-mark {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding-left: 10px;
+}
+.stage-body { grid-column: 2 / -1; padding-top: 9px; }
+.stage-body > .actions { margin-top: 12px; }
+.stage-text { margin: 0; font-size: 13px; line-height: 1.52; color: var(--ink-2); }
+
+.stage-now .stage-number, .stage-now .stage-mark { color: var(--accent); }
+.stage-now .stage-name { color: var(--ink); }
+.stage-done .stage-name { color: var(--ink-2); }
+
 .plain { list-style: none; margin: 8px 0 0; padding: 0; }
 .plain > li { padding: 0 0 8px; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
 .plain > li::before { content: "—"; color: var(--ink-3); margin-right: 8px; }
