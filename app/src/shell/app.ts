@@ -18,6 +18,7 @@ import {systemLocalTime} from "../main/review/scheduler";
 import {createNodeFs} from "../main/storage/nodeFs";
 import {dataPaths} from "../main/storage/paths";
 import {COPY} from "../renderer/copy";
+import {STEPS} from "../renderer/model/views";
 import {INVOKE_CHANNELS, eventName, invokeName} from "../shared/ipc";
 import {FLAVOUR} from "../shared/flavour";
 import {createDevReader, windowsFromFixture} from "../standins/devReader";
@@ -175,11 +176,13 @@ const TRAY_TITLE: Record<"on" | "off" | "problem", string> = {on: "‚óè", off: "‚
 function refreshTray(status: EngineStatus): void {
   if (!tray || !engine) return;
   // Every status change arrives here; only some of them change anything the tray shows.
-  const key = trayKey(status);
+  // `updateSettings` re-emits the status, so the step that ends onboarding reaches here too.
+  const onboarding = engine.settings().onboardingStep < STEPS.length;
+  const key = trayKey(status, onboarding);
   if (key === trayShowing) return;
   trayShowing = key;
   const current = engine;
-  const title = TRAY_TITLE[trayState(status)] + (status.pending > 0 ? ` ${status.pending}` : "");
+  const title = TRAY_TITLE[trayState(status, onboarding)] +(status.pending > 0 ? ` ${status.pending}` : "");
   // Only macOS draws a tray title; elsewhere the same few characters go into the hover text.
   if (process.platform === "darwin") tray.setTitle(title);
   else tray.setToolTip(`${APP_NAME} ${title}`);
