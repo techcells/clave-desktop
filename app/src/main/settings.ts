@@ -1,4 +1,5 @@
 import {z} from "zod";
+import {MODEL_TIME_SCALE_MAX} from "../core/constants";
 import {createExclusions} from "../core/exclusions/index";
 import {DEFAULT_EXCLUDED_SITES, DEFAULT_EXCLUSIONS} from "../core/index";
 import {DEFAULT_REVIEW_TIME} from "./constants";
@@ -18,18 +19,23 @@ export interface Settings {
   /** `${appVersion}:${modelSha256}` of the last passed self-test. */
   selfTestPassedFor: string | null;
   /**
+   * The factor that self-test measured for this machine's model limits, from 1 to MODEL_TIME_SCALE_MAX.
+   * `null` (a file from before the factor existed, or no test passed yet) is read as 1.
+   */
+  modelTimeScale: number | null;
+  /**
    * Whose exclusions, review time and capture switch these are. `null` until the first sign-in.
    * Another account never inherits them: the engine resets them before anything is read.
    */
   ownerUserId: string | null;
 }
 
-export type SettingsPatch = Partial<Pick<Settings, "exclusions" | "excludedSites" | "reviewTime" | "captureOn" | "onboardingStep" | "lastPromptDay" | "selfTestPassedFor" | "ownerUserId">>;
+export type SettingsPatch = Partial<Pick<Settings, "exclusions" | "excludedSites" | "reviewTime" | "captureOn" | "onboardingStep" | "lastPromptDay" | "selfTestPassedFor" | "modelTimeScale" | "ownerUserId">>;
 export type SettingsProblem = "BAD_REVIEW_TIME" | "BAD_EXCLUSIONS" | "BAD_VALUE" | "SAVE_FAILED";
 
 export const defaultSettings = (): Settings => ({
   exclusions: [...DEFAULT_EXCLUSIONS], excludedSites: [...DEFAULT_EXCLUDED_SITES], reviewTime: DEFAULT_REVIEW_TIME,
-  captureOn: false, onboardingStep: 0, lastPromptDay: null, selfTestPassedFor: null, ownerUserId: null
+  captureOn: false, onboardingStep: 0, lastPromptDay: null, selfTestPassedFor: null, modelTimeScale: null, ownerUserId: null
 });
 
 /** A local clock time, "HH:MM". Exported so the IPC router can refuse anything else at the door. */
@@ -38,6 +44,8 @@ const shape = z.object({
   exclusions: z.array(z.string()), excludedSites: z.array(z.string()), reviewTime: z.string().regex(REVIEW_TIME),
   captureOn: z.boolean(), onboardingStep: z.number().int().min(0),
   lastPromptDay: z.string().nullable(), selfTestPassedFor: z.string().nullable(),
+  // Files written before the factor existed carry none: read as 1, today's limits, until the next self-test.
+  modelTimeScale: z.number().min(1).max(MODEL_TIME_SCALE_MAX).nullable().default(null),
   // Files written before settings had an owner are adopted by the next account that signs in.
   ownerUserId: z.string().min(1).nullable().default(null)
 });

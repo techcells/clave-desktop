@@ -84,7 +84,7 @@ describe("LEAK TEST (app): with both stand-ins and a model that leaks", () => {
     const engine = await h.launch({reader});
     await engine.signIn("sardor", "correct");
     h.client.script.push(GATE_YES, {evidence: [{target_id: "self-test-postgres", statement: CLEAN}]});
-    expect(await engine.selfTest()).toEqual({ok: true});
+    expect(await engine.selfTest()).toEqual({ok: true, timeScale: 1});
     await engine.setCapture(true);
     expect(engine.status().capture).toBe("on");
     await vi.advanceTimersByTimeAsync(READER_FAILURE_LIMIT * ACTIVE_POLL_MS + PIPELINE_TICK_MS);
@@ -130,7 +130,7 @@ describe("LEAK TEST (app): with both stand-ins and a model that leaks", () => {
     engine.onStatus((s) => statuses.push(s));
     await engine.signIn("sardor", "correct");
     h.client.script.push(GATE_YES, {evidence: [{target_id: "self-test-postgres", statement: CLEAN}]});
-    expect(await engine.selfTest()).toEqual({ok: true});
+    expect(await engine.selfTest()).toEqual({ok: true, timeScale: 1});
     await engine.setCapture(true);
     await vi.advanceTimersByTimeAsync(READER_FAILURE_LIMIT * ACTIVE_POLL_MS + PIPELINE_TICK_MS);
     // The failures were counted and acted on — otherwise this test proves nothing about a path that ran.

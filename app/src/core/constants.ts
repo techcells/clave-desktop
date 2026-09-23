@@ -17,8 +17,25 @@ export const MAX_PHRASE_TOKENS = 5;
 
 export const GATE_LIMITS = {maxTokens: 300, timeoutMs: 30_000} as const;
 export const STATEMENT_LIMITS = {maxTokens: 700, timeoutMs: 60_000} as const;
-/** A conversation open that never settles must not wedge the pipeline. */
+/**
+ * A conversation open that never settles must not wedge the pipeline. The first open of a host also
+ * loads the model (`main/model/hostCore.ts`), which is why it is stretched with the other two.
+ */
 export const MODEL_OPEN_TIMEOUT_MS = 30_000;
+/**
+ * How far one machine may stretch the three limits above. They were sized for the machines the app
+ * was built on; the self-test (`main/model/selfTest.ts`) times this machine and stores the factor it
+ * needs, at least 1, and a machine that would need more than this is told it is too slow rather than
+ * left to time out on every scenario. Measured 2026-09-23 on an i5-10210U with Intel UHD (Vulkan):
+ * the self-test needed 3.3x, a typical scenario 4.2x and the largest one 25x.
+ */
+export const MODEL_TIME_SCALE_MAX = 4;
+/**
+ * Room on top of what the self-test measured: its text is five lines, and a real scenario is longer
+ * (the typical one above needed 1.3x the self-test's factor). A machine passes when the factor it
+ * measured, times this, is at most MODEL_TIME_SCALE_MAX.
+ */
+export const MODEL_TIME_SCALE_HEADROOM = 1.5;
 /** A conversation close that never settles must not wedge the pipeline. */
 export const MODEL_CLOSE_TIMEOUT_MS = 5_000;
 export const SUMMARY_MAX_CHARS = 500;
