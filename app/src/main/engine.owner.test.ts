@@ -11,7 +11,7 @@ async function ready(h: Harness, user = "sardor"): Promise<Engine> {
   const engine = await h.launch();
   await engine.signIn(user, "correct");
   h.client.script.push(GATE_YES, SELF_TEST);
-  expect(await engine.selfTest()).toEqual({ok: true});
+  expect(await engine.selfTest()).toEqual({ok: true, timeScale: 1});
   return engine;
 }
 const stored = (h: Harness) => JSON.parse(h.fs.text("/data/settings.json") as string) as {ownerUserId: string | null; excludedSites: string[]; captureOn: boolean};

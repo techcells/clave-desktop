@@ -1,9 +1,9 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
-import {MODEL_CLOSE_TIMEOUT_MS, MODEL_OPEN_TIMEOUT_MS, RETRY_TEMPERATURE, TEMPERATURE} from "../constants";
+import {MODEL_CLOSE_TIMEOUT_MS, MODEL_OPEN_TIMEOUT_MS, MODEL_TIME_SCALE_MAX, RETRY_TEMPERATURE, TEMPERATURE} from "../constants";
 import {createCounters} from "../counters";
 import {createFakeModel} from "../testing/fakeModel";
 import type {ModelConversation, ModelPort, Offered, Scenario} from "../types";
-import {extract} from "./extract";
+import {clampTimeScale, extract, scaledLimits} from "./extract";
 import {gateForm, statementsForm} from "./forms";
 import {buildSystemPrompt} from "./prompts";
 
@@ -37,6 +37,53 @@ describe("system prompt", () => {
     for (const needle of ["Sardor Astanov", "sardor", "pg", "PostgreSQL", "cp1", "Breaks problems down", "past-tense verb", "English"]) {
       expect(prompt).toContain(needle);
     }
+  });
+});
+
+describe("the machine factor", () => {
+  /** A model that answers at once and records the limits it was given. */
+  function recording(): {model: ModelPort; limits: Array<{maxTokens: number; timeoutMs: number}>} {
+    const limits: Array<{maxTokens: number; timeoutMs: number}> = [];
+    const answers = [gateYes, good];
+    const model: ModelPort = {
+      async open() {
+        return {async ask(_text, _form, given) { limits.push(given); return answers[limits.length - 1]; }, close: async () => undefined};
+      }
+    };
+    return {model, limits};
+  }
+
+  it("stretches the gate and statement limits by the factor, never the token budget", async () => {
+    const r = recording();
+    await extract({scenario, offered, userNames: [], model: r.model, counters: createCounters(), timeScale: 2.5});
+    expect(r.limits).toEqual([{maxTokens: 300, timeoutMs: 75_000}, {maxTokens: 700, timeoutMs: 150_000}]);
+  });
+
+  it("uses today's limits with no factor, and never shrinks them or goes past the largest factor", async () => {
+    for (const [scale, gate] of [[undefined, 30_000], [0.5, 30_000], [Number.NaN, 30_000], [99, 30_000 * MODEL_TIME_SCALE_MAX]] as const) {
+      const r = recording();
+      await extract({scenario, offered, userNames: [], model: r.model, counters: createCounters(), timeScale: scale});
+      expect(r.limits[0]!.timeoutMs, String(scale)).toBe(gate);
+    }
+    expect(clampTimeScale("3")).toBe(1);
+    expect(scaledLimits({maxTokens: 10, timeoutMs: 1_000}, 1.25)).toEqual({maxTokens: 10, timeoutMs: 1_250});
+  });
+
+  it("gives the first open, which loads the model, the stretched limit too", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveOpen!: (c: ModelConversation) => void;
+      const model: ModelPort = {open: () => new Promise((resolve) => { resolveOpen = resolve; })};
+      const running = extract({scenario, offered, userNames: [], model, counters: createCounters(), timeScale: 2});
+      await vi.advanceTimersByTimeAsync(MODEL_OPEN_TIMEOUT_MS + 1);
+      // Past today's 30 s but inside 60 s: still waiting, not failed.
+      let settled = false;
+      void running.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      resolveOpen({async ask() { return {...gateYes, is_professional: false}; }, close: async () => undefined});
+      expect(await running).toEqual({kind: "notProfessional"});
+    } finally { vi.useRealTimers(); }
   });
 });
 

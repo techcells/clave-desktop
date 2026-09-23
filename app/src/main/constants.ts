@@ -1,4 +1,5 @@
 /** Every threshold of the desktop app lives here. No magic numbers elsewhere in `main/`. */
+import {MODEL_OPEN_TIMEOUT_MS, MODEL_TIME_SCALE_MAX, STATEMENT_LIMITS} from "../core/constants";
 
 // Capture loop
 export const FOCUS_SETTLE_MS = 400;
@@ -40,8 +41,14 @@ export const BARREN_AFTER_MS = 10 * 60_000;
 export const MODEL_CRASH_LIMIT = 3;
 export const MODEL_CRASH_WINDOW_MS = 10 * 60_000;
 export const MODEL_IDLE_UNLOAD_MS = 10 * 60_000;
-/** Above the core's longest per-ask limit (60 s): a host that never replies must not hang a request forever. */
-export const MODEL_REQUEST_TIMEOUT_MS = 90_000;
+/**
+ * Above the core's longest limit on one request, at the largest machine factor any machine may have
+ * (the statements ask, 60 s times MODEL_TIME_SCALE_MAX, and the first open, which loads the model):
+ * a host that never replies must not hang a request forever, and a slow machine's legitimate answer
+ * must never be cut off here before the core's own limit has spoken.
+ */
+export const MODEL_REQUEST_TIMEOUT_MS = Math.max(STATEMENT_LIMITS.timeoutMs, MODEL_OPEN_TIMEOUT_MS) * MODEL_TIME_SCALE_MAX + 30_000;
+/** The whole self-test at a factor of 1; it runs with this times MODEL_TIME_SCALE_MAX (`selfTest.ts`). */
 export const SELF_TEST_TIMEOUT_MS = 120_000;
 export const DOWNLOAD_FREE_SPACE_MARGIN_BYTES = 512 * 1024 * 1024;
 /** How many new bytes are worth one `downloading` notification. 2.7 GB in 8 MiB steps is ~340 of them. */

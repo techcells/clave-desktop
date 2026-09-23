@@ -1,4 +1,4 @@
-import {GATE_LIMITS, MODEL_CLOSE_TIMEOUT_MS, MODEL_OPEN_TIMEOUT_MS, RETRY_TEMPERATURE, STATEMENT_LIMITS, TEMPERATURE} from "../constants";
+import {GATE_LIMITS, MODEL_CLOSE_TIMEOUT_MS, MODEL_OPEN_TIMEOUT_MS, MODEL_TIME_SCALE_MAX, RETRY_TEMPERATURE, STATEMENT_LIMITS, TEMPERATURE} from "../constants";
 import type {CountersApi} from "../counters";
 import {CoreError, type CoreErrorCode} from "../errors";
 import type {DraftStatement, ModelPort, Offered, Scenario} from "../types";
@@ -10,7 +10,21 @@ export type ExtractOutcome =
   | {kind: "statements"; drafts: DraftStatement[]}
   | {kind: "failed"; code: CoreErrorCode};
 
-export interface ExtractInput { scenario: Scenario; offered: Offered[]; userNames: string[]; model: ModelPort; counters: CountersApi }
+export interface ExtractInput {
+  scenario: Scenario; offered: Offered[]; userNames: string[]; model: ModelPort; counters: CountersApi;
+  /** This machine's factor on the open, gate and statement limits (the self-test measures it). 1 when absent. */
+  timeScale?: number;
+}
+
+/** A machine factor as the limits use it: at least 1, at most MODEL_TIME_SCALE_MAX, and 1 for anything that is not a number. */
+export function clampTimeScale(scale: unknown): number {
+  return typeof scale === "number" && Number.isFinite(scale) && scale > 1 ? Math.min(scale, MODEL_TIME_SCALE_MAX) : 1;
+}
+
+/** Limits stretched by a machine factor, rounded to whole milliseconds. The token budget never changes. */
+export function scaledLimits(limits: {maxTokens: number; timeoutMs: number}, scale: number): {maxTokens: number; timeoutMs: number} {
+  return {maxTokens: limits.maxTokens, timeoutMs: Math.round(limits.timeoutMs * clampTimeScale(scale))};
+}
 
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -21,26 +35,29 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 async function attempt(input: ExtractInput, temperature: number): Promise<ExtractOutcome> {
   const {scenario, offered, userNames, model, counters} = input;
   const ids = offered.map((o) => o.id);
+  const scale = clampTimeScale(input.timeScale);
+  const gateLimits = scaledLimits(GATE_LIMITS, scale);
+  const statementLimits = scaledLimits(STATEMENT_LIMITS, scale);
   const opening = model.open({
     systemPrompt: buildSystemPrompt({userNames, offered}), thoughts: "discourage", templateVariation: "3.5", temperature
   });
   let conversation: Awaited<ReturnType<ModelPort["open"]>>;
   try {
-    conversation = await withTimeout(opening, MODEL_OPEN_TIMEOUT_MS);
+    conversation = await withTimeout(opening, Math.round(MODEL_OPEN_TIMEOUT_MS * scale));
   } catch (error) {
     opening.then((late) => late.close()).catch(() => undefined);
     throw error;
   }
   try {
     counters.inc("extract.gate.runs");
-    const gate = parseGate(await withTimeout(conversation.ask(gateQuestion(scenario.text), gateForm(), GATE_LIMITS), GATE_LIMITS.timeoutMs));
+    const gate = parseGate(await withTimeout(conversation.ask(gateQuestion(scenario.text), gateForm(), gateLimits), gateLimits.timeoutMs));
     if (!gate) throw new CoreError("MODEL_ANSWER_INVALID");
     if (!gate.is_professional) { counters.inc("extract.gate.notProfessional"); return {kind: "notProfessional"}; }
     if (!gate.user_demonstrated_something) { counters.inc("extract.gate.nothingDemonstrated"); return {kind: "nothingDemonstrated"}; }
 
     counters.inc("extract.statements.runs");
     const answer = parseStatements(
-      await withTimeout(conversation.ask(STATEMENTS_QUESTION, statementsForm(ids), STATEMENT_LIMITS), STATEMENT_LIMITS.timeoutMs), ids);
+      await withTimeout(conversation.ask(STATEMENTS_QUESTION, statementsForm(ids), statementLimits), statementLimits.timeoutMs), ids);
     if (!answer) throw new CoreError("MODEL_ANSWER_INVALID");
 
     const kindOf = new Map(offered.map((o) => [o.id, o.kind]));

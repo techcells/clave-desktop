@@ -154,7 +154,8 @@ export const COPY = {
   },
   onboarding: {
     download: (gigabytes: string) => `Download the model (${gigabytes} GB)`,
-    checking: "Checking it works on your machine",
+    // The check measures this machine too (main/model/selfTest.ts), and on a slower one it takes minutes.
+    checking: "Checking it works on your machine. On a slower computer this can take a few minutes.",
     /**
      * What macOS is about to show, in the order the user meets it (measured with the owner on
      * macOS 27, 2026-09-18). Three things this copy exists to get right:
@@ -211,6 +212,12 @@ export const COPY = {
     modelSize: (gigabytes: string) => `The model is ${gigabytes} GB. It is downloaded once and then runs on this machine, with or without a connection.`,
     progress: "Download progress", pause: "Pause", resume: "Resume", verifying: "Checking the file that arrived",
     selfTestFailed: "The model did not finish the check on this machine.",
+    /**
+     * The check answered, or would have, but this computer needs far longer than the app allows: the
+     * model would run for many minutes per scenario with the processor or graphics card flat out. Said
+     * as it is, rather than as a failure the user could fix by trying again.
+     */
+    selfTestTooSlow: "This computer is too slow to run the model: it needs a faster processor or graphics card. Trying again will not change that.",
     screenRecording: "Screen Recording",
     allowed: "I have allowed it", checkingPermission: "Waiting for Screen Recording",
     // Shown under the line above once the wait has run long (`stillWaiting` in model/views.ts). The

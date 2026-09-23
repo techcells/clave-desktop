@@ -40,6 +40,16 @@ describe("tray state", () => {
     expect(trayState(checking)).toBe("off");
   });
 
+  it("never shows a problem during onboarding: the unfinished steps are what the window is teaching", () => {
+    const fresh = status("off", ["SIGNED_OUT", "NO_TAXONOMY", "MODEL_MISSING", "NO_PERMISSION"]);
+    expect(trayState(fresh, true)).toBe("off");
+    expect(trayState(status("off", ["NO_PERMISSION"]), true)).toBe("off");
+    expect(trayState(status("on", []), true)).toBe("on");
+    // Once onboarding is over, the same blockers mean something broke.
+    expect(trayState(fresh, false)).toBe("problem");
+    expect(trayKey(fresh, true)).not.toBe(trayKey(fresh, false));
+  });
+
   it("changes its key only for what the tray actually shows", () => {
     const base = status("off", ["MODEL_MISSING"], 2);
     const noisier: EngineStatus = {...base, waitingUpload: 9, extractionPaused: "lowBattery", resumeAt: 5};

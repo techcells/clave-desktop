@@ -35,9 +35,16 @@ export const BLOCKER_TRAY: Record<Blocker, "problem" | "off"> = {
   EXTENSION_UNSUPPORTED: "problem"
 };
 
-/** The tray icon state: reading, not reading, or not able to read. */
-export function trayState(status: Pick<EngineStatus, "capture" | "blockers">): TrayState {
+/**
+ * The tray icon state: reading, not reading, or not able to read.
+ *
+ * `onboarding` is true until the user has finished onboarding. Until then nothing is a "problem":
+ * a new install is signed out and has no permission by definition, the window is already walking
+ * the user through exactly those steps, and a "!" beside the clock would read as something broken.
+ */
+export function trayState(status: Pick<EngineStatus, "capture" | "blockers">, onboarding = false): TrayState {
   if (status.capture === "on") return "on";
+  if (onboarding) return "off";
   return status.blockers.some((b) => BLOCKER_TRAY[b] === "problem") ? "problem" : "off";
 }
 
@@ -51,5 +58,5 @@ export function trayState(status: Pick<EngineStatus, "capture" | "blockers">): T
  * rebuild. The tray TITLE is untouched: "nothing to read" is not a problem state, and turning the
  * glyph into "!" would send the user looking for something to fix.
  */
-export const trayKey = (status: Pick<EngineStatus, "capture" | "blockers" | "pending" | "nothingRead">): string =>
-  `${trayState(status)}|${status.capture}|${status.pending}|${status.nothingRead === null ? "reading" : "nothing"}`;
+export const trayKey = (status: Pick<EngineStatus, "capture" | "blockers" | "pending" | "nothingRead">, onboarding = false): string =>
+  `${trayState(status, onboarding)}|${status.capture}|${status.pending}|${status.nothingRead === null ? "reading" : "nothing"}`;

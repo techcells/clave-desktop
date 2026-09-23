@@ -34,6 +34,8 @@ export interface PipelineConfig {
    * run is "Electron" to the window list, whatever the flavour calls it.
    */
   selfApp?: string | readonly string[];
+  /** This machine's factor on the model limits, as the self-test measured it (`extract.ts`). 1 when absent. */
+  modelTimeScale?: number;
   taxonomyVersion: string;
   skills: Skill[];
   competencies: Competency[];

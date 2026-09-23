@@ -145,6 +145,7 @@ function Model({shell}: {shell: Shell}): ReactNode {
   const [state, askDownload, refused] = useDownload();
   const [checking, setChecking] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [tooSlow, setTooSlow] = useState(false);
   const heading = useHeading();
 
   // A REFUSED read is not "no model on disk": main did not answer at all, and treating a refusal as
@@ -167,6 +168,8 @@ function Model({shell}: {shell: Shell}): ReactNode {
     const result = await clave.selfTest();
     setChecking(false);
     setFailed(!result.ok);
+    // A self-test that ran out of even the longest time is the same answer as one that measured too much.
+    setTooSlow(!result.ok && (result.code === "MODEL_TOO_SLOW" || result.code === "SELF_TEST_TIMEOUT"));
     shell.askStatus();
   };
 
@@ -192,7 +195,7 @@ function Model({shell}: {shell: Shell}): ReactNode {
       case "ready":
         return checking ? <p className="note">{COPY.onboarding.checking}</p> : (
           <>
-            {failed ? <p className="problem">{COPY.onboarding.selfTestFailed}</p> : null}
+            {failed ? <p className="problem">{tooSlow ? COPY.onboarding.selfTestTooSlow : COPY.onboarding.selfTestFailed}</p> : null}
             <p className="actions"><Button tone="ink" label={BLOCKERS.SELF_TEST_NEEDED.action} press={check} /></p>
           </>
         );

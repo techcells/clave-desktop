@@ -84,7 +84,7 @@ export function createPipeline(initial: PipelineConfig, ports: Ports): Pipeline 
     try {
       if (!current) return;
       const offered = offeredFor(current.index, current.config.competencies, scenario);
-      const outcome = await extract({scenario, offered, userNames: current.config.userNames, model: ports.model, counters});
+      const outcome = await extract({scenario, offered, userNames: current.config.userNames, model: ports.model, counters, timeScale: current.config.modelTimeScale});
       if (outcome.kind !== "statements") return;
       const skillById = new Map(current.config.skills.map((s) => [s.id, s]));
       const allowTerms = offered.flatMap((o) => {

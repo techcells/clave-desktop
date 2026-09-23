@@ -16,6 +16,19 @@ describe("settings", () => {
     expect(store.needsReview()).toBe(false);
   });
 
+  it("keeps the machine factor a self-test measured, reads an older file without one as none, and refuses one out of range", async () => {
+    const fs = createMemFs();
+    const store = await loadSettings({fs, path: PATH});
+    expect(store.get().modelTimeScale).toBeNull();
+    expect(await store.update({modelTimeScale: 2.4})).toEqual({ok: true});
+    expect((await loadSettings({fs, path: PATH})).get().modelTimeScale).toBe(2.4);
+    for (const bad of [0.5, 4.5, Number.NaN]) expect(await store.update({modelTimeScale: bad}), String(bad)).toEqual({ok: false, problem: "BAD_VALUE"});
+    // A file written before the factor existed.
+    const {modelTimeScale: _dropped, ...older} = defaultSettings();
+    await fs.writeAtomic(PATH, new TextEncoder().encode(JSON.stringify(older)));
+    expect((await loadSettings({fs, path: PATH})).get().modelTimeScale).toBeNull();
+  });
+
   it("saves a change, tells listeners, and finds it again after a restart", async () => {
     const fs = createMemFs();
     const store = await loadSettings({fs, path: PATH});

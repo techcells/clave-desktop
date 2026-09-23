@@ -257,7 +257,7 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
   const config = (): PipelineConfig => {
     const t = taxonomy.current();
     const s = settings.get();
-    return {exclusions: s.exclusions, excludedSites: s.excludedSites, selfApp: [APP_NAME, ...(deps.otherSelfNames ?? [])], taxonomyVersion: t?.version ?? "none", skills: t?.skills ?? [], competencies: t?.competencies ?? [], userNames: session.names()};
+    return {exclusions: s.exclusions, excludedSites: s.excludedSites, selfApp: [APP_NAME, ...(deps.otherSelfNames ?? [])], modelTimeScale: s.modelTimeScale ?? 1, taxonomyVersion: t?.version ?? "none", skills: t?.skills ?? [], competencies: t?.competencies ?? [], userNames: session.names()};
   };
   const newPipeline = (): Pipeline => createPipeline(config(), {model, clock: {now, dayKey: (ms) => deps.local(ms).day}, newId: deps.newId});
   let pipeline = newPipeline();
@@ -780,7 +780,8 @@ export async function createEngine(deps: EngineDeps): Promise<Engine> {
       if (deps.downloader.state().kind !== "ready") return {ok: false, code: "MODEL_FAILED"};
       const result = await runSelfTest(model);
       background(log.event(result.ok ? "SELF_TEST_PASSED" : "SELF_TEST_FAILED"));
-      if (result.ok) await settings.update({selfTestPassedFor: selfTestKey(deps.appVersion, deps.modelSha256)});
+      // The factor is a fact about this machine and this model, so it is stored with the key that says which.
+      if (result.ok) await settings.update({selfTestPassedFor: selfTestKey(deps.appVersion, deps.modelSha256), modelTimeScale: result.timeScale});
       await evaluate();
       return result;
     },

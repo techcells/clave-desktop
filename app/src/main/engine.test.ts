@@ -46,7 +46,7 @@ async function ready(h: Harness, overrides: Partial<EngineDeps> = {}): Promise<E
   await engine.signIn("sardor", "correct");
   h.client.script.push({activity_summary: "Rewrote a query.", is_professional: true, user_demonstrated_something: true},
     {evidence: [{target_id: "self-test-postgres", statement: "Rewrote a slow reporting query with a grouped join and a composite index after reading the plan."}]});
-  expect(await engine.selfTest()).toEqual({ok: true});
+  expect(await engine.selfTest()).toEqual({ok: true, timeScale: 1});
   return engine;
 }
 

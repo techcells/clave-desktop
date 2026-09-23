@@ -263,7 +263,7 @@ export function createMockBridge(scenario: Scenario): ClaveBridge {
     selfTest: async (): Promise<SelfTestResult> => {
       await wait(900);
       pushStatus({blockers: without("SELF_TEST_NEEDED")});
-      return {ok: true};
+      return {ok: true, timeScale: 1};
     },
     recheckPermission: async () => {
       if (permission === "denied") return permission;
