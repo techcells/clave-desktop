@@ -6,7 +6,11 @@
 //! capture, and closes when the app sends `release` (capture switched off), when the screen locks,
 //! after [`IDLE_CLOSE`] without a capture, and when the user stops sharing from GNOME's indicator.
 //! That last one is a refusal: nothing reopens the session quietly until the app asks again
-//! (`requestPermission`), so the indicator never comes back on by itself.
+//! (`requestPermission`), so the indicator never comes back on by itself. GNOME also ends every cast
+//! itself when the screen locks, a moment before the lock is reported: an end that the screen is
+//! clearly locked for within [`LOCK_GRACE`] of first seeing it is a close and keeps the token
+//! (measured 2026-09-23). As housekeeping runs once a second, a Stop followed by a lock within
+//! about [`LOCK_GRACE`] plus one second is taken for a lock; anything later is a Stop.
 //!
 //! Every close bumps a generation number. A start that finishes after a close it did not see (a
 //! `release` or a lock that arrived while the portal was answering) closes what it just opened, so
@@ -35,6 +39,12 @@ pub const IDLE_CLOSE: Duration = Duration::from_secs(60);
 /// How long a crop may wait for a frame fresh enough to use (a new session's first frame, or the
 /// first frame after the window changed).
 pub const CROP_TIMEOUT: Duration = Duration::from_millis(1_000);
+
+/// How long a share that ended without this helper asking waits for the screen to report locked
+/// before it counts as the user's Stop. GNOME ended the cast at lock about 0.1 s before `GetActive`
+/// said so (2026-09-23); the lock answer is cached 100 ms and housekeeping runs every second, so the
+/// grace sits between two ticks rather than on one (review M3).
+pub const LOCK_GRACE: Duration = Duration::from_millis(2_500);
 
 /// The longest restore token accepted from the app. The portal's are UUIDs (36 characters).
 pub const MAX_TOKEN_CHARS: usize = 128;
@@ -68,10 +78,13 @@ struct State {
     /// quietly in between. A read the app sent just before switching off may reach the worker after
     /// the `release`; without this it would open a session nobody closes but the idle timer.
     released: bool,
+    /// When the open session was first seen ended (the portal closed it, or its stream failed);
+    /// `None` while it runs. Cleared with the session.
+    ended_since: Option<Instant>,
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { token: None, open: None, starting: false, generation: 0, last_capture: None, refused: false, released: false });
+    Mutex::new(State { token: None, open: None, starting: false, generation: 0, last_capture: None, refused: false, released: false, ended_since: None });
 
 fn state() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -165,16 +178,35 @@ fn refuse(state: &mut State) {
 /// releasing the lock.
 fn take_open(state: &mut State) -> Option<Open> {
     state.generation += 1;
+    state.ended_since = None;
     state.open.take()
+}
+
+/// Remember when the open session was FIRST seen ended, so the wait for a lock has an end.
+fn note_ended(state: &mut State, ended: bool, now: Instant) {
+    if ended && state.ended_since.is_none() {
+        state.ended_since = Some(now);
+    }
 }
 
 /// Open a session if none is, from the kept token (quietly) or with the Share dialog when
 /// `interactive`. A new token goes to the app as a `grant` event.
 pub fn open(interactive: bool) -> Result<(), CaptureError> {
+    let mut dead = None;
     let (token, generation) = {
         let mut state = state();
-        if state.open.is_some() {
-            return Ok(());
+        if let Some(current) = state.open.as_ref() {
+            if state.ended_since.is_none() && !current.ended() {
+                return Ok(());
+            }
+            // The share has ended and housekeeping has not decided yet (`Keep::Wait`). A read has
+            // nothing to read. The Share button is pressed on an unlocked screen, so the end was the
+            // user's Stop: refuse (dropping the token), then show the dialog, never a quiet restore.
+            if !interactive {
+                return Err(CaptureError::Timeout);
+            }
+            refuse(&mut state);
+            dead = take_open(&mut state);
         }
         if state.starting {
             return Err(CaptureError::Timeout);
@@ -188,6 +220,9 @@ pub fn open(interactive: bool) -> Result<(), CaptureError> {
         state.starting = true;
         (state.token.clone(), state.generation)
     };
+    if let Some(dead) = dead {
+        stop(dead);
+    }
 
     let started = bus::connection()
         .ok_or(PortalError::Bus)
@@ -237,12 +272,30 @@ pub fn open(interactive: bool) -> Result<(), CaptureError> {
     }
 }
 
-/// Close the session, if one is open. The token is kept for the next one.
+/// Close the session, if one is open and still running; the token is kept for the next one. One
+/// that has already ended is left for housekeeping to settle as a lock or the user's Stop.
 pub fn close() {
-    let open = take_open(&mut state());
+    let open = {
+        let mut state = state();
+        let ended_now = state.open.as_ref().is_some_and(Open::ended);
+        if settled_later(state.ended_since, ended_now) {
+            // Already over: the lock-or-Stop decision is housekeeping's (`keep`). Nothing reopens
+            // it meanwhile: `released` stops a quiet start, and a dead session answers Timeout.
+            note_ended(&mut state, true, Instant::now());
+            None
+        } else {
+            take_open(&mut state)
+        }
+    };
     if let Some(open) = open {
         stop(open);
     }
+}
+
+/// Whether a session being closed has already ended (seen by housekeeping, or just now), and so is
+/// left for housekeeping to settle: closing it here threw a Stop away (reviews I3, M1).
+fn settled_later(ended_since: Option<Instant>, ended_now: bool) -> bool {
+    ended_since.is_some() || ended_now
 }
 
 /// Close the session only if nothing has closed it since `generation`, so a late failure of one
@@ -267,27 +320,42 @@ pub enum Keep {
     Close,
     /// The user or the compositor ended it: close, and do not reopen quietly.
     Refuse,
+    /// It ended, but a lock may be about to show (GNOME ends casts just before): decide later.
+    Wait,
 }
 
-/// The housekeeping decision, pure: ended beats locked beats idle.
-pub fn keep(ended: bool, locked: bool, last_capture: Option<Instant>, now: Instant) -> Keep {
-    if ended {
-        Keep::Refuse
-    } else if locked || last_capture.is_none_or(|last| now.duration_since(last) >= IDLE_CLOSE) {
+/// The housekeeping decision, pure. A session that ended (`ended_since`) and the screen reports
+/// locked within [`LOCK_GRACE`]: ended by the lock, closed, token kept. Ended [`LOCK_GRACE`] ago or
+/// more: the user's Stop, refused. A live session closes while locked (or unsure) or idle.
+pub fn keep(ended_since: Option<Instant>, lock: Option<bool>, last_capture: Option<Instant>, now: Instant) -> Keep {
+    if let Some(since) = ended_since {
+        // Age first, so a lock that shows up late never turns a Stop into a close (review I2), and
+        // only a clear "locked" counts: a question that failed must not keep the consent (I1).
+        if now.duration_since(since) >= LOCK_GRACE {
+            Keep::Refuse
+        } else if lock == Some(true) {
+            Keep::Close
+        } else {
+            Keep::Wait
+        }
+    } else if lock != Some(false) || last_capture.is_none_or(|last| now.duration_since(last) >= IDLE_CLOSE) {
         Keep::Close
     } else {
         Keep::Keep
     }
 }
 
-/// Close an open session that has ended, or at once while `locked`, or after [`IDLE_CLOSE`] idle.
-/// Called from the focus loop's timer.
-pub fn housekeeping(locked: bool, now: Instant) {
+/// Settle an ended session ([`keep`]: a lock's close, the user's refusal, or wait), close a live one
+/// at once while locked (or the answer cannot be had), or after [`IDLE_CLOSE`] idle. Called from the
+/// focus loop's timer with GNOME's lock answer.
+pub fn housekeeping(lock: Option<bool>, now: Instant) {
     let open = {
         let mut state = state();
         let Some(current) = state.open.as_ref() else { return };
-        match keep(current.ended(), locked, state.last_capture, now) {
-            Keep::Keep => return,
+        let ended = current.ended();
+        note_ended(&mut state, ended, now);
+        match keep(state.ended_since, lock, state.last_capture, now) {
+            Keep::Keep | Keep::Wait => return,
             Keep::Close => take_open(&mut state),
             Keep::Refuse => {
                 refuse(&mut state);
@@ -308,13 +376,10 @@ pub fn crop(window: &ExtensionWindow, not_before: Instant) -> Result<Frame, Capt
         let mut state = state();
         let Some(current) = state.open.as_ref() else { return Err(CaptureError::Other) };
         if current.ended() {
-            refuse(&mut state);
-            let open = take_open(&mut state);
-            drop(state);
-            if let Some(open) = open {
-                stop(open);
-            }
-            return Err(CaptureError::Refused);
+            // Whether this is the user's Stop or the screen locking is housekeeping's call (it
+            // waits for a lock, `keep`): this read just has nothing to read.
+            note_ended(&mut state, true, Instant::now());
+            return Err(CaptureError::Timeout);
         }
         let node_id = stream_for(&current.streams, window).ok_or(CaptureError::Gone)?;
         let crops = current.crops.clone();
@@ -360,7 +425,7 @@ mod tests {
     }
 
     fn fresh_state() -> State {
-        State { token: Some("t".to_owned()), open: None, starting: false, generation: 0, last_capture: None, refused: false, released: false }
+        State { token: Some("t".to_owned()), open: None, starting: false, generation: 0, last_capture: None, refused: false, released: false, ended_since: None }
     }
 
     #[test]
@@ -426,19 +491,80 @@ mod tests {
         assert_eq!(stream_for(&[stream(52, Some((0, 0)))], &window_on("[1440,0,1920,1080]")), None);
     }
 
+    const LOCKED: Option<bool> = Some(true);
+    const UNLOCKED: Option<bool> = Some(false);
+    const UNKNOWN: Option<bool> = None;
+
     #[test]
-    fn an_ended_session_is_refused_before_anything_else() {
+    fn a_share_that_ends_while_locked_is_closed_not_refused() {
+        // GNOME 46 ends every screen cast when the screen locks (measured 2026-09-23): that is not
+        // the user's Stop, and the token must survive it so reading comes back after unlocking.
         let now = Instant::now();
-        assert_eq!(keep(true, false, Some(now), now), Keep::Refuse);
-        assert_eq!(keep(true, true, None, now), Keep::Refuse);
+        assert_eq!(keep(Some(now), LOCKED, Some(now), now), Keep::Close);
+        assert_eq!(keep(Some(now - LOCK_GRACE + Duration::from_millis(1)), LOCKED, None, now), Keep::Close);
+    }
+
+    #[test]
+    fn a_share_that_ends_unlocked_waits_for_a_lock_then_is_refused() {
+        // The cast ended a moment BEFORE the lock was reported (17:37:46.98 against 17:37:47).
+        let now = Instant::now();
+        assert_eq!(keep(Some(now), UNLOCKED, Some(now), now), Keep::Wait);
+        assert_eq!(keep(Some(now - LOCK_GRACE + Duration::from_millis(1)), UNLOCKED, Some(now), now), Keep::Wait);
+        assert_eq!(keep(Some(now - LOCK_GRACE), UNLOCKED, Some(now), now), Keep::Refuse);
+        assert_eq!(keep(Some(now - LOCK_GRACE), UNLOCKED, None, now), Keep::Refuse, "idle does not soften a Stop");
+    }
+
+    #[test]
+    fn a_stop_followed_later_by_a_lock_is_still_a_stop() {
+        // Review I2: a lock that shows up after the grace does not turn a Stop into a close.
+        let now = Instant::now();
+        assert_eq!(keep(Some(now - LOCK_GRACE), LOCKED, Some(now), now), Keep::Refuse);
+    }
+
+    #[test]
+    fn a_lock_answer_that_cannot_be_had_never_saves_a_stop() {
+        // Review I1: "locked when unsure" stops capture, but it must not keep the consent.
+        let now = Instant::now();
+        assert_eq!(keep(Some(now), UNKNOWN, Some(now), now), Keep::Wait);
+        assert_eq!(keep(Some(now - LOCK_GRACE), UNKNOWN, Some(now), now), Keep::Refuse);
+        assert_eq!(keep(None, UNKNOWN, Some(now), now), Keep::Close, "a live session still closes when unsure");
+    }
+
+    #[test]
+    fn switching_off_leaves_an_ended_share_for_housekeeping_to_settle() {
+        // Reviews I3 and M1: `release` during the wait must neither throw a Stop away nor decide
+        // with a lock answer that may have failed; housekeeping settles it (`keep`).
+        let now = Instant::now();
+        assert!(settled_later(Some(now), false), "already seen ended");
+        assert!(settled_later(None, true), "ended, not yet seen by housekeeping");
+        assert!(!settled_later(None, false), "a running share switched off is simply closed");
+    }
+
+    #[test]
+    fn the_wait_for_a_lock_is_off_the_housekeeping_tick() {
+        // Review M3: housekeeping ticks once a second; a grace of exactly two ticks is decided by
+        // timing noise.
+        assert!(LOCK_GRACE > Duration::from_secs(2) && LOCK_GRACE < Duration::from_secs(3));
     }
 
     #[test]
     fn a_locked_or_idle_session_is_closed_and_a_busy_one_kept() {
         let now = Instant::now();
-        assert_eq!(keep(false, true, Some(now), now), Keep::Close);
-        assert_eq!(keep(false, false, Some(now - IDLE_CLOSE), now), Keep::Close);
-        assert_eq!(keep(false, false, None, now), Keep::Close);
-        assert_eq!(keep(false, false, Some(now - IDLE_CLOSE + Duration::from_millis(1)), now), Keep::Keep);
+        assert_eq!(keep(None, LOCKED, Some(now), now), Keep::Close);
+        assert_eq!(keep(None, UNLOCKED, Some(now - IDLE_CLOSE), now), Keep::Close);
+        assert_eq!(keep(None, UNLOCKED, None, now), Keep::Close);
+        assert_eq!(keep(None, UNLOCKED, Some(now - IDLE_CLOSE + Duration::from_millis(1)), now), Keep::Keep);
+    }
+
+    #[test]
+    fn a_session_is_first_seen_ended_once_and_forgotten_with_it() {
+        let (mut state, now) = (fresh_state(), Instant::now());
+        note_ended(&mut state, false, now);
+        assert_eq!(state.ended_since, None, "a live session has no end");
+        note_ended(&mut state, true, now);
+        note_ended(&mut state, true, now + LOCK_GRACE);
+        assert_eq!(state.ended_since, Some(now), "the FIRST sighting counts, or the wait never ends");
+        take_open(&mut state);
+        assert_eq!(state.ended_since, None, "the next session starts with no end");
     }
 }

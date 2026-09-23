@@ -40,7 +40,8 @@ struct Slot {
 static SLOT: Mutex<Slot> = Mutex::new(Slot { connection: None, last_attempt: None });
 
 /// The shared connection, opened on first use and tried again at most every [`RETRY_AFTER`] while
-/// it cannot be opened. `None` means "cannot tell": every caller then answers locked and no window.
+/// it cannot be opened. `None` means "cannot tell": callers then answer no window, capture treats the
+/// screen as locked, and [`lock_answer`] says unknown.
 /// A failed attempt writes `E_BUS` on stderr (a fixed code, as everything there).
 pub fn connection() -> Option<Connection> {
     let mut slot = SLOT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -72,8 +73,15 @@ pub fn locked_from<E>(reply: Result<bool, E>) -> bool {
 
 /// Whether GNOME's screen shield is up (see [`locked_from`]).
 pub fn screen_is_locked() -> bool {
-    let Some(connection) = connection() else { return true };
-    locked_from(
+    locked_from(lock_answer().ok_or(()))
+}
+
+/// GNOME's own answer: `Some(true)` locked, `Some(false)` unlocked, `None` when it could not be had.
+/// Capture treats `None` as locked; deciding whether an ended share was the user's Stop must not
+/// (a failed question would otherwise keep the consent, session review I1).
+pub fn lock_answer() -> Option<bool> {
+    let connection = connection()?;
+    lock_answer_from(
         connection
             .call_method(
                 Some("org.gnome.ScreenSaver"),
@@ -86,10 +94,15 @@ pub fn screen_is_locked() -> bool {
     )
 }
 
-static LOCK_ANSWER: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+/// A reply as [`lock_answer`] gives it: `None` for any failure or a reply that is not a boolean.
+pub fn lock_answer_from<E>(reply: Result<bool, E>) -> Option<bool> {
+    reply.ok()
+}
 
-/// [`screen_is_locked`], reusing an answer younger than [`LOCK_CACHE`]. For the focus loop only.
-pub fn screen_is_locked_recently() -> bool {
+static LOCK_ANSWER: Mutex<Option<(Instant, Option<bool>)>> = Mutex::new(None);
+
+/// [`lock_answer`], reusing an answer younger than [`LOCK_CACHE`]. For the focus loop only.
+pub fn lock_answer_recently() -> Option<bool> {
     let now = Instant::now();
     let mut answer = LOCK_ANSWER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some((at, locked)) = *answer
@@ -97,9 +110,14 @@ pub fn screen_is_locked_recently() -> bool {
     {
         return locked;
     }
-    let locked = screen_is_locked();
+    let locked = lock_answer();
     *answer = Some((now, locked));
     locked
+}
+
+/// [`screen_is_locked`], reusing an answer younger than [`LOCK_CACHE`]. For the focus loop only.
+pub fn screen_is_locked_recently() -> bool {
+    locked_from(lock_answer_recently().ok_or(()))
 }
 
 /// Ask the extension for the focused window.
@@ -166,5 +184,12 @@ mod tests {
         assert!(!locked_from::<()>(Ok(false)));
         assert!(locked_from::<()>(Ok(true)));
         assert!(locked_from(Err("no reply")));
+    }
+
+    #[test]
+    fn a_lock_answer_that_cannot_be_had_is_unknown_not_locked() {
+        assert_eq!(lock_answer_from::<()>(Ok(false)), Some(false));
+        assert_eq!(lock_answer_from::<()>(Ok(true)), Some(true));
+        assert_eq!(lock_answer_from(Err("no reply")), None);
     }
 }

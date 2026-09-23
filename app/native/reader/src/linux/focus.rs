@@ -141,7 +141,7 @@ pub fn run_event_loop() -> ! {
         if tick == Tick::Timer {
             timer_due = Instant::now() + POLL;
             bus::refresh_shell_owner();
-            super::session::housekeeping(bus::screen_is_locked_recently(), Instant::now());
+            super::session::housekeeping(bus::lock_answer_recently(), Instant::now());
         }
         if let Tick::Signal(window) = tick
             && !signal_is_news(&mut last_signalled, window)
