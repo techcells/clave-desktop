@@ -10,6 +10,12 @@
 # Flavour: the "Run workflow" input, else the repository variable CLAVE_FLAVOUR, else `internal`.
 # The release holds the DMG only; the run's attachment also has the ZIP, SHA256SUMS and the artefacts report.
 #
+# Windows (job windows-x64): the same pipeline on a Windows runner, ending in a per-user Inno Setup
+# installer and a ZIP instead of the DMG. Windows signing is not set up yet (owner decision,
+# 2026-09-23: unsigned for now), so the job runs for the internal flavour only and skips a release
+# build rather than ship an unsigned one. On a tag it adds the installer to the release the macOS job
+# created, which is why it waits for that job. It needs no secrets.
+#
 # Repository settings this needs (Settings -> Secrets and variables -> Actions):
 #   variable MACOS_SIGNING_IDENTITY   the certificate NAME, e.g. "Clave Agent Dev" or
 #                                     "Developer ID Application: <Team> (<TEAMID>)"
@@ -205,3 +211,133 @@ jobs:
         if: always()
         run: |
           if [[ -n "${KEYCHAIN:-}" ]]; then security delete-keychain "$KEYCHAIN" || true; fi
+
+  windows-x64:
+    # Unsigned for now: a release-flavour build is skipped here rather than shipped unsigned.
+    if: ${{ (inputs.flavour || vars.CLAVE_FLAVOUR || 'internal') != 'release' }}
+    # On a tag the installer joins the release the macOS job creates, so that job goes first.
+    needs: macos-arm64
+    runs-on: windows-2025
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      FLAVOUR: ${{ inputs.flavour || vars.CLAVE_FLAVOUR || 'internal' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/native/reader
+
+      - name: Cache the Electron zip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\electron\Cache
+          key: electron-win-${{ hashFiles('app/pnpm-lock.yaml') }}
+
+      - name: Check the configuration
+        run: |
+          $version = node -p "require('./app/package.json').version"
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$version") {
+            Write-Output "::error::tag $env:GITHUB_REF_NAME does not match app/package.json version $version"; exit 1
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+          # The scripts call pnpm and cargo by absolute path; point them at the runner's.
+          "CLAVE_PNPM=$((Get-Command pnpm).Source)" >> $env:GITHUB_ENV
+          "CLAVE_CARGO=$((Get-Command cargo).Source)" >> $env:GITHUB_ENV
+
+      - name: Install dependencies and the installer compiler
+        run: |
+          pnpm --dir app install --frozen-lockfile
+          node app/node_modules/electron/install.js
+          cargo fetch --locked --manifest-path app/native/reader/Cargo.toml
+          # Inno Setup 6 for the installer step (per machine on the runner; the app itself installs per user).
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Typecheck and test
+        run: |
+          pnpm --dir app typecheck
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pnpm --dir app test
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pnpm --dir app test:native
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Build
+        run: |
+          pnpm --dir app build:native
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pnpm --dir app build -- --flavour $env:FLAVOUR
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Fill pnpm's metadata cache
+        run: |
+          # As on macOS: the offline re-resolve in package:stage silently skips the optional platform
+          # packages (the Windows model binaries) until one online resolve has filled pnpm's metadata cache.
+          $scratch = Join-Path $env:RUNNER_TEMP "metadata-warmup"
+          New-Item -ItemType Directory -Force $scratch | Out-Null
+          Copy-Item app/pnpm-lock.yaml, app/pnpm-workspace.yaml $scratch
+          node -e 'const v=require("./app/package.json").dependencies["node-llama-cpp"]; process.stdout.write(JSON.stringify({name:"warmup",version:"0.0.0",private:true,dependencies:{"node-llama-cpp":v}}))' | Set-Content -Encoding utf8NoBOM (Join-Path $scratch "package.json")
+          $env:CI = $null
+          pnpm install --prod --no-frozen-lockfile --config.node-linker=hoisted --ignore-scripts --dir $scratch
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          foreach ($p in "win-x64", "win-x64-vulkan") {
+            if (-not (Test-Path (Join-Path $scratch "node_modules/@node-llama-cpp/$p"))) { Write-Output "::error::@node-llama-cpp/$p was not resolved"; exit 1 }
+          }
+          Remove-Item -Recurse -Force $scratch
+
+      - name: Stage, bundle and fuse
+        run: |
+          pnpm --dir app package:stage -- --flavour $env:FLAVOUR
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pnpm --dir app package:bundle -- --flavour $env:FLAVOUR --allow-download
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # No --sign: the fuses are flipped and the build stays unsigned (see the header).
+          pnpm --dir app package:sign -- --flavour $env:FLAVOUR
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Make the installer and ZIP
+        run: |
+          pnpm --dir app package:artefacts -- --flavour $env:FLAVOUR
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Set-Location "app/out/$env:FLAVOUR/artefacts"
+          Get-ChildItem *.exe, *.zip | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content -Encoding utf8NoBOM SHA256SUMS
+          Get-Content SHA256SUMS
+
+      - name: Attach to the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: clave-agent-${{ env.FLAVOUR }}-${{ env.VERSION }}-win-x64
+          path: |
+            app/out/${{ env.FLAVOUR }}/artefacts/*.exe
+            app/out/${{ env.FLAVOUR }}/artefacts/*.zip
+            app/out/${{ env.FLAVOUR }}/artefacts/SHA256SUMS
+            app/out/${{ env.FLAVOUR }}/artefacts/artefacts-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Add the installer to the GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = Get-ChildItem "app/out/$env:FLAVOUR/artefacts/*-setup.exe" | Select-Object -First 1
+          gh release upload $env:GITHUB_REF_NAME $installer.FullName --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
