@@ -21,10 +21,12 @@ const asked = new URLSearchParams(window.location.search).get("scenario");
 const scenario: Scenario = isScenario(asked) ? asked : DEFAULT;
 
 window.clave = createMockBridge(scenario);
-window.location.hash = scenario.startsWith("onboarding")
+// A Linux scenario routes as its name without the "linux-" in front.
+const route = scenario.replace(/^linux-/, "");
+window.location.hash = route.startsWith("onboarding") || route === "signin"
   ? ""
-  : scenario === "settings" ? routeHash("settings")
-    : scenario.startsWith("review") ? routeHash("review")
+  : route === "settings" ? routeHash("settings")
+    : route.startsWith("review") ? routeHash("review")
       : routeHash("home");
 
 /** A row of links across the top of the page, so every scenario is one click away. */

@@ -4,7 +4,8 @@ import {BLOCKER_TRAY, trayKey, trayState} from "./trayState";
 
 const ALL_BLOCKERS: Blocker[] = [
   "SIGNED_OUT", "NO_TAXONOMY", "MODEL_MISSING", "SELF_TEST_NEEDED", "NO_PERMISSION",
-  "PERMISSION_NEEDS_RESTART", "SETTINGS_NEED_REVIEW", "MODEL_PROBLEM", "READER_PROBLEM", "STORAGE_PROBLEM"
+  "PERMISSION_NEEDS_RESTART", "SETTINGS_NEED_REVIEW", "MODEL_PROBLEM", "READER_PROBLEM", "STORAGE_PROBLEM",
+  "EXTENSION_MISSING", "EXTENSION_OFF", "EXTENSIONS_OFF_IN_GNOME", "EXTENSION_NEEDS_LOGIN", "EXTENSION_UNSUPPORTED"
 ];
 
 const status = (capture: EngineStatus["capture"], blockers: Blocker[], pending = 0): EngineStatus =>
@@ -16,12 +17,14 @@ describe("tray state", () => {
     for (const blocker of ALL_BLOCKERS) expect(BLOCKER_TRAY[blocker], blocker).toMatch(/^(problem|off)$/);
   });
 
-  it("maps each of the ten blockers to the icon it was given", () => {
+  it("maps each blocker to the icon it was given", () => {
     for (const blocker of ALL_BLOCKERS) expect(trayState(status("off", [blocker])), blocker).toBe(BLOCKER_TRAY[blocker]);
     // A permission that needs a restart and a lost exclusions file are both a working app that
     // broke, each with its own fix button: the tray says so rather than looking merely switched off.
     expect(ALL_BLOCKERS.filter((b) => BLOCKER_TRAY[b] === "problem"))
-      .toEqual(["SIGNED_OUT", "NO_PERMISSION", "PERMISSION_NEEDS_RESTART", "SETTINGS_NEED_REVIEW", "MODEL_PROBLEM", "READER_PROBLEM", "STORAGE_PROBLEM"]);
+      .toEqual(["SIGNED_OUT", "NO_PERMISSION", "PERMISSION_NEEDS_RESTART", "SETTINGS_NEED_REVIEW", "MODEL_PROBLEM", "READER_PROBLEM", "STORAGE_PROBLEM",
+        // Linux: every GNOME extension blocker needs the user, so none looks merely switched off.
+        "EXTENSION_MISSING", "EXTENSION_OFF", "EXTENSIONS_OFF_IN_GNOME", "EXTENSION_NEEDS_LOGIN", "EXTENSION_UNSUPPORTED"]);
     expect(ALL_BLOCKERS.filter((b) => BLOCKER_TRAY[b] === "off")).toEqual(["NO_TAXONOMY", "MODEL_MISSING", "SELF_TEST_NEEDED"]);
   });
 

@@ -39,6 +39,11 @@
 //! so a helper that sent `grant` to an app that did not know it would break reads; the other
 //! direction is harmless (a helper ignores an op it does not know). macOS and Windows helpers speak
 //! 3 too and simply never send `grant`.
+//!
+//! What 4 added over 3 (the Linux plan, Task 7 review I2): the `extension` event, `{"refused": bool}`,
+//! sent by the Linux helper when the GNOME extension starts or stops refusing it, so the app can
+//! restart the helper or ask for a new login instead of reading nothing with no blocker shown. The
+//! number moved for the same reason as 3's. macOS and Windows helpers never send it.
 
 use serde_json::{Value, json};
 
@@ -46,7 +51,7 @@ use crate::platform::WindowInfo;
 use crate::scheduler::{FailDetail, FailReason, LineBox, ReadAnswer, ReadGeometry, ReadStats};
 
 /// The protocol version announced in the `ready` event.
-pub const PROTOCOL_VERSION: u64 = 3;
+pub const PROTOCOL_VERSION: u64 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {
@@ -180,6 +185,12 @@ pub fn ready_line() -> String {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn grant_line(token: &str) -> String {
     json!({"event": "grant", "token": token}).to_string()
+}
+
+/// Protocol 4: whether the GNOME extension refuses this helper (Linux). A fixed boolean, nothing else.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn extension_line(refused: bool) -> String {
+    json!({"event": "extension", "refused": refused}).to_string()
 }
 
 pub fn focus_line() -> String {
@@ -603,10 +614,10 @@ mod tests {
 
     #[test]
     fn the_ready_event_announces_the_protocol() {
-        // 3, not 2 (and 2 was not 1). An app must be able to tell a helper that speaks what it
+        // 4, not 3 (and 3 was not 2). An app must be able to tell a helper that speaks what it
         // speaks from one that does not — the approved window since 2, the screen-share grant since
-        // 3 — and this line is the only place it can.
-        assert_eq!(ready_line(), r#"{"event":"ready","protocol":3}"#);
+        // 3, the extension event since 4 — and this line is the only place it can.
+        assert_eq!(ready_line(), r#"{"event":"ready","protocol":4}"#);
     }
 
     #[test]
@@ -648,6 +659,12 @@ mod tests {
     #[test]
     fn a_grant_event_carries_the_token_and_nothing_else() {
         assert_eq!(grant_line("0e5a-3c2d"), r#"{"event":"grant","token":"0e5a-3c2d"}"#);
+    }
+
+    #[test]
+    fn an_extension_event_says_refused_or_not_and_nothing_else() {
+        assert_eq!(extension_line(true), r#"{"event":"extension","refused":true}"#);
+        assert_eq!(extension_line(false), r#"{"event":"extension","refused":false}"#);
     }
 
     #[test]

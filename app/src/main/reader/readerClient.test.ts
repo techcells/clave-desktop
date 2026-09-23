@@ -1143,6 +1143,32 @@ describe("reader client: the screen-share grant (protocol 3)", () => {
     expect(helpers.latest().received.filter((m) => m.op === "grant" || m.op === "release")).toEqual([]);
   });
 
+  it("passes the extension's refusals on, and a throwing observer breaks nothing (protocol 4)", async () => {
+    const heard: boolean[] = [];
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onExtension: (refused) => { heard.push(refused); throw new Error("boom"); }});
+    await ready();
+    helpers.latest().emit({event: "extension", refused: true});
+    helpers.latest().emit({event: "extension", refused: false});
+    await settle();
+    expect(heard).toEqual([true, false]);
+    const permission = client.permission();
+    helpers.latest().answerLast({permission: "granted"});
+    await expect(permission).resolves.toBe("granted");
+  });
+
+  it("restarts on request: the helper is sent away without blame, and a fresh one gets the grant", async () => {
+    client.grant("t-1");
+    await ready();
+    const old = helpers.latest();
+    client.restart();
+    expect(old.received).toContainEqual({op: "shutdown"});
+    const fresh = helpers.latest();
+    expect(fresh).not.toBe(old);
+    fresh.ready();
+    await settle();
+    expect(fresh.received).toContainEqual({op: "grant", token: "t-1"});
+  });
+
   it("an observer that throws does not break the client", async () => {
     client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onGrant: () => { throw new Error("boom"); }});
     await ready();

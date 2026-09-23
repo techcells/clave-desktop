@@ -103,6 +103,23 @@ export function othersCover(focused, above) {
   });
 }
 
+/**
+ * The answer to `Status()`, which anyone may ask: the extension's version and the reader path it
+ * loaded at login, as JSON. The app compares both with what it has just installed, and a difference
+ * means the running GNOME still has the old ones: a new login is needed. Nothing about any window is
+ * in it. Anything that is not a whole version or a non-empty path is `null`.
+ *
+ * @param {unknown} version `metadata.json`'s version
+ * @param {unknown} readerPath the path read from `reader-path` at `enable()`, or null
+ * @returns {string}
+ */
+export function statusAnswer(version, readerPath) {
+  return JSON.stringify({
+    version: Number.isSafeInteger(version) ? version : null,
+    readerPath: typeof readerPath === "string" && readerPath.length > 0 ? readerPath : null
+  });
+}
+
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
 const isCoordinate = (value) => Number.isSafeInteger(value);
 const nameOrNull = (value) => (typeof value === "string" && value.length > 0 ? value : null);

@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {mayAnswer, othersCover, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows} from "./logic.js";
+import {mayAnswer, othersCover, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows, statusAnswer} from "./logic.js";
 
 const READER = "/opt/Clave Agent/clave-reader";
 
@@ -163,6 +163,18 @@ describe("othersCover", () => {
     // A focused window with no size cannot be shown to be uncovered.
     expect(othersCover({frame: {x: 100, y: 100, width: 0, height: 600}, pid: 2143}, [])).toBe(true);
     expect(othersCover(focused, null)).toBe(true);
+  });
+});
+
+describe("statusAnswer", () => {
+  it("says which version is running and which reader path it loaded, and nothing else", () => {
+    expect(JSON.parse(statusAnswer(3, READER))).toEqual({version: 3, readerPath: READER});
+  });
+
+  it("says null for what it does not have, so the app sees a login is needed", () => {
+    expect(JSON.parse(statusAnswer(undefined, null))).toEqual({version: null, readerPath: null});
+    expect(JSON.parse(statusAnswer("3", ""))).toEqual({version: null, readerPath: null});
+    expect(JSON.parse(statusAnswer(1.5, 7))).toEqual({version: null, readerPath: null});
   });
 });
 

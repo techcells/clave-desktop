@@ -4,7 +4,7 @@ import {DEFAULT_EXCLUDED_SITES, DEFAULT_EXCLUSIONS} from "../core/index";
 import {createDevReader} from "../standins/devReader";
 import {createReadyDownloader} from "../standins/readyDownloader";
 import {DEFAULT_REVIEW_TIME, PAUSE_FOR_MS, PIPELINE_TICK_MS, SCHEDULER_CHECK_MS, TAXONOMY_RETRY_MS, UPLOAD_BACKOFF_MS} from "./constants";
-import type {Engine, EngineDeps, UserSettingsPatch} from "./engine";
+import type {Blocker, Engine, EngineDeps, UserSettingsPatch} from "./engine";
 import {selfTestKey} from "./model/selfTest";
 import type {FileSystem} from "./ports/system";
 import {createHarness, type Harness} from "./testing/harness";
@@ -439,6 +439,35 @@ describe("engine", () => {
     expect(h.downloader.state()).toEqual({kind: "ready"});
     await engine.deleteAllData({removeModel: true});
     expect(h.downloader.state()).toEqual({kind: "missing"});
+    await engine.quit();
+  });
+
+  it("counts the system's own blockers (Linux: the GNOME extension), before permission, and re-decides when they change", async () => {
+    const h = createHarness();
+    let current: Blocker[] = ["EXTENSION_NEEDS_LOGIN"];
+    const listeners = new Set<() => void>();
+    const systemBlockers = {current: () => current, onChange: (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; }};
+    const engine = await ready(h, {systemBlockers});
+    expect(engine.status().blockers).toEqual(["EXTENSION_NEEDS_LOGIN"]);
+    expect(await engine.setCapture(true)).toEqual({ok: false, blockers: ["EXTENSION_NEEDS_LOGIN"]});
+    const seen: Blocker[][] = [];
+    engine.onStatus((status) => seen.push([...status.blockers]));
+    current = [];
+    for (const cb of listeners) cb();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(engine.status().blockers).toEqual([]);
+    expect(seen.at(-1)).toEqual([]);
+    expect(await engine.setCapture(true)).toEqual({ok: true});
+    await engine.quit();
+    expect(listeners.size).toBe(0);
+  });
+
+  it("puts the system's blockers before the permission ones, since the extension comes before the share", async () => {
+    const h = createHarness();
+    h.reader.permissionValue = "denied";
+    const engine = await h.launch({systemBlockers: {current: () => ["EXTENSION_MISSING"], onChange: () => () => undefined}});
+    const blockers = engine.status().blockers;
+    expect(blockers.indexOf("EXTENSION_MISSING")).toBeLessThan(blockers.indexOf("NO_PERMISSION"));
     await engine.quit();
   });
 

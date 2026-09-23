@@ -24,6 +24,8 @@ export type FromHelper =
    * helper sent a token main would not accept: ignored, never a failure of the calls in flight.
    */
   | {kind: "grant"; token: string | null}
+  /** Protocol 4 (Linux): whether the GNOME extension refuses this helper; sent only when that changes. */
+  | {kind: "extension"; refused: boolean}
   /** `body` is everything the helper sent except `id`. It is NOT validated here: the caller knows which call it answers. */
   | {kind: "answer"; id: number; body: Record<string, unknown>};
 
@@ -88,6 +90,7 @@ export function parseLine(line: string): FromHelper | null {
   if ("event" in record) {
     if (record.event === "focus") return {kind: "focus"};
     if (record.event === "grant") return {kind: "grant", token: isPlausibleGrantToken(record.token) ? record.token : null};
+    if (record.event === "extension" && typeof record.refused === "boolean") return {kind: "extension", refused: record.refused};
     if (record.event === "ready" && Number.isSafeInteger(record.protocol)) return {kind: "ready", protocol: record.protocol as number};
     return null;
   }

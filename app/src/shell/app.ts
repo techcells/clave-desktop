@@ -2,6 +2,7 @@ import {execFile, spawn} from "node:child_process";
 import {randomBytes, randomUUID} from "node:crypto";
 import {existsSync, readFileSync} from "node:fs";
 import {readdir, readFile} from "node:fs/promises";
+import {homedir} from "node:os";
 import {dirname, join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, safeStorage, session, shell, Tray, utilityProcess} from "electron";
@@ -37,6 +38,7 @@ import {openLicences} from "./licences";
 import {background, startFailureCode} from "./lifecycle";
 import {isTranslocatedPath} from "./translocation";
 import {chooseHelperPath, createRealReader} from "./realReader";
+import {createGnomeExtension, extensionBlockers, extensionDataHome, extensionFs, runCommand, type GnomeExtension} from "./gnomeExtension";
 import {createScreenGrant, screenGrantFile, type ScreenGrant} from "./screenGrant";
 import {runSmoke} from "./smoke";
 import {askTrayHost, closeAction} from "./trayHost";
@@ -74,6 +76,9 @@ const SCRIPTED_MODEL = MODE.scriptedModel;
 const SMOKE = MODE.smoke;
 const REAL_READER = MODE.realReader;
 const MODEL_URL = ENV.CLAVE_MODEL_URL ?? DEFAULT_MODEL_URL;
+
+/** How often the GNOME extension is looked at again (Linux). */
+const EXTENSION_CHECK_MS = 60_000;
 
 /** How long `before-quit` waits for the engine to save its pool before quitting anyway. */
 const QUIT_HARD_MS = 10_000;
@@ -245,12 +250,16 @@ async function start(): Promise<void> {
   // The screen-share grant (Linux) is kept here, beside the real reader: every fresh token the reader
   // sends replaces the kept one, and capture starting and stopping becomes `grant` and `release`.
   let screenGrant: ScreenGrant | null = null;
+  // Linux: made below, beside the reader; the reader's word on the extension reaches it from here.
+  let gnomeExtension: GnomeExtension | null = null;
+  const helperPath = chooseHelperPath([join(dirname(process.execPath), HELPER_NAME), here(`native/${HELPER_NAME}`)], existsSync);
   const real = REAL_READER
     ? createRealReader({
-      helperPath: chooseHelperPath([join(dirname(process.execPath), HELPER_NAME), here(`native/${HELPER_NAME}`)], existsSync), exists: existsSync,
+      helperPath, exists: existsSync,
       spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: readerSpawnEnv(process.platform, process.env, path)}),
       now: () => Date.now(),
-      onGrant: (token) => { screenGrant?.saveToken(token); }
+      onGrant: (token) => { screenGrant?.saveToken(token); },
+      onExtension: (refused) => { if (gnomeExtension) background(gnomeExtension.readerRefused(refused)); }
     })
     : null;
   const reader: Reader = real ? real.reader : standInReader();
@@ -264,6 +273,16 @@ async function start(): Promise<void> {
     // it is asked for permission.
     await screenGrant.load();
   }
+  // Linux: the GNOME extension the real reader asks which window is in front (Task 7). Its files come
+  // with the app (`gnome-extension/` beside the bundle), and are installed for this user only. Checked
+  // once before the engine exists, so the first status already says what it needs.
+  gnomeExtension = real && process.platform === "linux"
+    ? createGnomeExtension({
+      run: runCommand, fs: extensionFs, bundleDir: here("gnome-extension"), dataHome: extensionDataHome(process.env, homedir()), helperPath,
+      uid: process.getuid?.() ?? -1, restartReader: () => real.reader.restart()
+    })
+    : null;
+  if (gnomeExtension) await gnomeExtension.check();
   // Running from macOS's quarantine copy: a grant given here would belong to a path nobody can find
   // again, so the window says "move to Applications" and the permission request is a no-op until
   // the app has been moved and reopened. The engine keeps its reader; only the renderer's ask is cut.
@@ -318,7 +337,8 @@ async function start(): Promise<void> {
     notifyReview: (count) => notify(COPY.notify.review(count), {onClick: showWindow}),
     notifyCaptureResumed: () => notify(COPY.notify.resumed, {silent: true}),
     ...(googleSignIn ? {googleSignIn} : {}),
-    ...(screenGrant ? {alsoDelete: () => screenGrant.forget()} : {})
+    ...(screenGrant ? {alsoDelete: () => screenGrant.forget()} : {}),
+    ...(gnomeExtension ? {systemBlockers: {current: () => extensionBlockers(gnomeExtension.state()), onChange: gnomeExtension.onChange}} : {})
   });
   const current = engine;
   real?.attach(current);
@@ -329,7 +349,18 @@ async function start(): Promise<void> {
     appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS, translocated, googleSignIn: MODE.realApi, platform: platformName(process.platform)},
     openWhatLeaves: async () => { await shell.openPath(here("WHAT-LEAVES.md")); },
     openLicences: () => openLicences({path: here("THIRD-PARTY-LICENSES.txt"), exists: existsSync, open: async (path) => { await shell.openPath(path); }}),
-    restartApp: () => { app.relaunch(); app.quit(); }
+    restartApp: () => { app.relaunch(); app.quit(); },
+    ...(gnomeExtension ? {
+      extension: async (action) => {
+        switch (action) {
+          case "install": return gnomeExtension.install();
+          case "remove": return gnomeExtension.remove();
+          case "logOut": await gnomeExtension.logOut(); return gnomeExtension.state();
+          case "check": return gnomeExtension.check();
+          case "enableAll": return gnomeExtension.enableAll();
+        }
+      }
+    } : {})
   });
   for (const channel of INVOKE_CHANNELS) {
     ipcMain.handle(invokeName(channel), (event, ...args: unknown[]) => {
@@ -341,6 +372,13 @@ async function start(): Promise<void> {
 
   powerMonitor.on("lock-screen", () => current.system("locked"));
   powerMonitor.on("unlock-screen", () => current.system("unlocked"));
+  // Nothing tells the app when the user switches the extension off, or logs in again: look every
+  // minute. (Electron's lock and unlock events do not fire on Linux, so there is no "after unlock".)
+  const extension = gnomeExtension;
+  if (extension) {
+    const extensionTimer = setInterval(() => { background(extension.check()); }, EXTENSION_CHECK_MS);
+    teardown.push(() => clearInterval(extensionTimer));
+  }
   powerMonitor.on("suspend", () => current.system("suspend"));
   powerMonitor.on("resume", () => current.system("resume"));
 

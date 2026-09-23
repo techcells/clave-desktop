@@ -128,6 +128,7 @@ export function createEvalHelper(deps: EvalHelperDeps): EvalHelper {
     if (message === null) return;                                  // not ours to interpret; the helper is a process
     if (message.kind === "focus") return;                          // the harness stages its own windows; focus is noise
     if (message.kind === "grant") return;                          // the harness keeps no screen-share grant (Linux)
+    if (message.kind === "extension") return;                      // nor does it act on the GNOME extension's refusals
     if (message.kind === "ready") {
       const settle = readyResolve;
       readyResolve = null;

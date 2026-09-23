@@ -37,7 +37,15 @@ export const BLOCKERS: Record<Blocker, BlockerCopy> = {
   SETTINGS_NEED_REVIEW: {sentence: "Your settings could not be read and were reset. Please check what is excluded.", action: "Open Settings"},
   MODEL_PROBLEM: {sentence: "The model stopped working several times in a row.", action: "Try again"},
   READER_PROBLEM: {sentence: "Reading the screen failed several times in a row.", action: "Try again"},
-  STORAGE_PROBLEM: {sentence: "The disk refused a write, so reading is paused.", action: "Try again"}
+  STORAGE_PROBLEM: {sentence: "The disk refused a write, so reading is paused.", action: "Try again"},
+  // Linux only (GNOME): the extension that tells the app which window is in front and where.
+  EXTENSION_MISSING: {sentence: "The GNOME extension this app needs to see which window is in front is not installed, or is out of date.", action: "Install the GNOME extension"},
+  EXTENSION_OFF: {sentence: "The GNOME extension this app needs is switched off.", action: "Switch it on"},
+  // Ubuntu does not install GNOME's Extensions app, so the app offers GNOME's own switch itself, only
+  // on this press (owner's decision, Task 7 review I3), and says what else that switch starts.
+  EXTENSIONS_OFF_IN_GNOME: {sentence: "GNOME has all extensions switched off, and this app needs one. Switching them on also starts any other extensions you had installed.", action: "Switch extensions on"},
+  EXTENSION_NEEDS_LOGIN: {sentence: "The GNOME extension is installed. It starts after you log out and back in.", action: "Log out now"},
+  EXTENSION_UNSUPPORTED: {sentence: "This version of GNOME cannot run the extension this app needs.", action: "Check again"}
 };
 
 /**
@@ -272,21 +280,111 @@ export const WINDOWS_COPY = {
   addressLimit: "In Microsoft Edge and Google Chrome it only reads a page while the address is visible."
 } as const;
 
+/**
+ * The words for the system's own parts on Linux (GNOME on Wayland or Xorg). Nothing on Linux is a
+ * permission in a settings app: the screen is shared through GNOME's own Share dialog (the ScreenCast
+ * portal), once, and GNOME shows a sharing icon in its top bar while a session is open. The sharing
+ * stops when the user chooses Stop there, which is also when NO_PERMISSION comes back.
+ *
+ * Measured there (L7, 2026-09-23): Google Chrome, only in English (its incognito badge is an English
+ * word, reader: linux/chrome.rs), and Firefox, whose private windows are told apart by their title
+ * and which is not read at all when set to never remember history (reader: linux/firefox.rs).
+ */
+export const LINUX_COPY = {
+  noPermission: {sentence: "Screen sharing is off for this app.", action: "Share the screen"},
+  // The rare case the reader client cures with a fresh helper and cannot: a kept share that the
+  // system still refuses. A restart starts the share again from nothing.
+  needsRestart: {sentence: "Screen sharing is on, but this app cannot use it until it restarts.", action: "Restart now"},
+  checkingHome: "Checking screen sharing. This can take a moment after the app starts.",
+  permission: {
+    title: "Screen sharing",
+    lead: "GNOME will ask which screen to share with this app. Choose your screen, then Share. The app reads the text of the window in front and keeps no picture. While reading is on, GNOME shows a sharing icon in the top bar."
+  },
+  checkingOnboarding: "Waiting for screen sharing",
+  privateWindows: "Google Chrome and Firefox are read, except their private windows. Chrome is read only when its language is English, and Firefox is not read when it is set to never remember history. Other browsers are not read yet.",
+  addressLimit: "In Google Chrome and Firefox it only reads a page while the address is visible.",
+  // `basic_text`: Electron found no system keyring (decision 5 of the Linux design), so a sign-in
+  // cannot be kept encrypted and is refused rather than stored in the clear.
+  storageUnavailable: "Your sign-in could not be saved, because this machine has no keyring to keep it in safely.",
+  // Under the sign-in form. With automatic login GNOME's keyring is still locked, and the first app
+  // that stores a secret makes GNOME ask for the password: a dialog that would otherwise come from
+  // nowhere, in the middle of signing in.
+  keyringNote: "GNOME may ask for your password to unlock its keyring. That is where your sign-in is kept.",
+  /**
+   * The screen-sharing step on Linux, in two stages, the extension first. The extension's own
+   * problems are the blockers' sentences (`BLOCKERS.EXTENSION_*`); these are the words around them.
+   */
+  setup: {
+    lead: "On GNOME this takes two things, each done once: an extension that tells the app which window is in front, and a screen share.",
+    stages: {extension: "The GNOME extension", share: "Share the screen"},
+    marks: {done: "Done", now: "Now", next: "Next"},
+    extensionLead: "Only GNOME knows which window is in front and where it is. This small extension tells this app's reader, and answers nobody else.",
+    loginNote: "Save your work in other apps first: GNOME asks before it logs out. This step picks up where it stopped when you are back.",
+    installFailed: "The GNOME extension could not be installed. Try again in a moment."
+  },
+  settings: {
+    label: "GNOME extension",
+    lead: "It tells this app which window is in front. Without it nothing is read.",
+    remove: "Remove the GNOME extension",
+    removed: "Removed. Nothing is read until it is installed again from Home.",
+    removeFailed: "The GNOME extension could not be removed. Try again in a moment."
+  }
+} as const;
+
 type CopyPlatform = AppInfo["platform"];
-const onWindows = (platform: CopyPlatform): boolean => platform === "windows";
+
+/** One platform's words for the parts of the system the app talks about. */
+interface SystemWords {
+  noPermission: BlockerCopy;
+  needsRestart: BlockerCopy;
+  checkingHome: string;
+  privateWindows: string;
+  /** The address-row limit in this platform's browsers, or null for macOS's own line. */
+  addressLimit: string | null;
+  storageUnavailable: string;
+}
+
+/**
+ * The words per platform. macOS's are the objects above themselves, so its output is exactly what it
+ * was (the tests compare by identity), and a window told no platform reads as macOS.
+ */
+const SYSTEM_WORDS: Record<NonNullable<CopyPlatform>, SystemWords> = {
+  mac: {
+    noPermission: BLOCKERS.NO_PERMISSION, needsRestart: BLOCKERS.PERMISSION_NEEDS_RESTART,
+    checkingHome: COPY.home.checkingPermission, privateWindows: COPY.onboarding.privateWindows, addressLimit: null,
+    storageUnavailable: SIGN_IN_PROBLEMS.STORAGE_UNAVAILABLE
+  },
+  windows: {
+    noPermission: WINDOWS_COPY.noPermission, needsRestart: BLOCKERS.PERMISSION_NEEDS_RESTART,
+    checkingHome: WINDOWS_COPY.checkingHome, privateWindows: WINDOWS_COPY.privateWindows, addressLimit: WINDOWS_COPY.addressLimit,
+    storageUnavailable: SIGN_IN_PROBLEMS.STORAGE_UNAVAILABLE
+  },
+  linux: {
+    noPermission: LINUX_COPY.noPermission, needsRestart: LINUX_COPY.needsRestart,
+    checkingHome: LINUX_COPY.checkingHome, privateWindows: LINUX_COPY.privateWindows, addressLimit: LINUX_COPY.addressLimit,
+    storageUnavailable: LINUX_COPY.storageUnavailable
+  }
+};
+const wordsFor = (platform: CopyPlatform): SystemWords => SYSTEM_WORDS[platform ?? "mac"];
 
 /** A blocker's sentence and button, in this platform's words. */
 export const blockerCopy = (blocker: Blocker, platform: CopyPlatform): BlockerCopy =>
-  blocker === "NO_PERMISSION" && onWindows(platform) ? WINDOWS_COPY.noPermission : BLOCKERS[blocker];
+  blocker === "NO_PERMISSION" ? wordsFor(platform).noPermission
+    : blocker === "PERMISSION_NEEDS_RESTART" ? wordsFor(platform).needsRestart
+    : BLOCKERS[blocker];
+
+/** A refused sign-in's sentence, in this platform's words. */
+export const signInProblem = (code: SignInProblem, platform: CopyPlatform): string =>
+  code === "STORAGE_UNAVAILABLE" ? wordsFor(platform).storageUnavailable : SIGN_IN_PROBLEMS[code];
 
 /** Which browsers are read, for onboarding and Settings. */
-export const privateWindowsLine = (platform: CopyPlatform): string =>
-  onWindows(platform) ? WINDOWS_COPY.privateWindows : COPY.onboarding.privateWindows;
+export const privateWindowsLine = (platform: CopyPlatform): string => wordsFor(platform).privateWindows;
 
 /** Home's quiet line while the reader's first permission answer is not in yet. */
-export const checkingPermissionLine = (platform: CopyPlatform): string =>
-  onWindows(platform) ? WINDOWS_COPY.checkingHome : COPY.home.checkingPermission;
+export const checkingPermissionLine = (platform: CopyPlatform): string => wordsFor(platform).checkingHome;
 
 /** The known limits, with the one line that names browsers in this platform's browsers. */
-export const knownLimits = (platform: CopyPlatform): readonly string[] =>
-  onWindows(platform) ? KNOWN_LIMITS.map((limit) => (limit.startsWith("In Chrome and Safari") ? WINDOWS_COPY.addressLimit : limit)) : KNOWN_LIMITS;
+export const knownLimits = (platform: CopyPlatform): readonly string[] => {
+  const line = wordsFor(platform).addressLimit;
+  return line === null ? KNOWN_LIMITS : KNOWN_LIMITS.map((limit) => (limit.startsWith("In Chrome and Safari") ? line : limit));
+};

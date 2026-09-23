@@ -24,6 +24,16 @@ describe("the one fix button", () => {
     expect(fixAction("READER_PROBLEM")).toBe("retryReader");
   });
 
+  it("fixes the GNOME extension with its own actions: install (also switches it on), log out, or look again", () => {
+    expect(fixAction("EXTENSION_MISSING")).toBe("installExtension");
+    expect(fixAction("EXTENSION_OFF")).toBe("installExtension");
+    expect(fixAction("EXTENSION_NEEDS_LOGIN")).toBe("logOut");
+    // GNOME's own switch for all extensions: switched on only on this press (owner's decision, Task 7
+    // review I3). GNOME's version is the user's to change: the app only looks again.
+    expect(fixAction("EXTENSIONS_OFF_IN_GNOME")).toBe("enableExtensions");
+    expect(fixAction("EXTENSION_UNSUPPORTED")).toBe("checkExtension");
+  });
+
   it("only re-reads the status where the app is already retrying by itself", () => {
     expect(fixAction("STORAGE_PROBLEM")).toBe("reread");
     expect(fixAction("NO_TAXONOMY")).toBe("reread");

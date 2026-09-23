@@ -66,6 +66,33 @@ pub fn seen_after(previous: Option<Seen>, answer: Option<&ExtensionWindow>, now:
 
 static SEEN: Mutex<Option<Seen>> = Mutex::new(None);
 
+/// What the app is told about the extension's answers: `Some(true)` once it refuses this helper
+/// (`NotAllowed`), `Some(false)` once it answers again. Other failures (not on the bus, a timeout) say
+/// nothing here: the app sees those itself. Returns the new state and, only on a change, what to send;
+/// a first answer that is not a refusal sends nothing, since the app starts from "not refused".
+pub fn extension_report(previous: Option<bool>, answer: &Result<Option<ExtensionWindow>, extension::ExtensionError>) -> (Option<bool>, Option<bool>) {
+    let now = match answer {
+        Ok(_) => false,
+        Err(extension::ExtensionError::NotAllowed) => true,
+        Err(_) => return (previous, None),
+    };
+    let changed = now != previous.unwrap_or(false);
+    (Some(now), changed.then_some(now))
+}
+
+static REFUSED: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Record an answer from the extension and tell the app when whether it refuses this helper changes.
+fn report_extension(answer: &Result<Option<ExtensionWindow>, extension::ExtensionError>) {
+    let mut refused = REFUSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (now, send) = extension_report(*refused, answer);
+    *refused = now;
+    drop(refused);
+    if let Some(value) = send {
+        crate::runtime::emit(&crate::protocol::extension_line(value));
+    }
+}
+
 /// Record an answer from the extension (`None` for no window, or for an answer that could not be
 /// had) and, for a window, answer since when it has looked like this.
 fn note(answer: Option<&ExtensionWindow>) -> Option<Instant> {
@@ -190,10 +217,12 @@ impl Platform for LinuxPlatform {
     }
 
     /// The extension's errors (`NotAllowed`, `Absent`, ...) end here as `None`, the same answer as
-    /// "no window". Task 7 of the Linux plan gives them a route to the app, for its "extension
-    /// missing" blocker (Task 2 review).
+    /// "no window". A refusal (`NotAllowed`) also reaches the app as the `extension` event (protocol
+    /// 4, `report_extension`); the app sees an absent extension itself (`shell/gnomeExtension.ts`).
     fn front_window(&self) -> Option<WindowInfo> {
-        let answer = bus::focused_window().ok().flatten();
+        let answer = bus::focused_window();
+        report_extension(&answer);
+        let answer = answer.ok().flatten();
         note(answer.as_ref());
         let window = answer?;
         let mut ids = IDS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -328,6 +357,26 @@ mod tests {
         assert_eq!(again.map(|seen| seen.since), Some(back));
         // Without the gap, the same window keeps its since.
         assert_eq!(seen_after(first, Some(&window), back).map(|seen| seen.since), Some(start));
+    }
+
+    #[test]
+    fn the_app_is_told_only_when_the_extension_starts_or_stops_refusing_this_helper() {
+        use extension::ExtensionError;
+        let window = parse_answer(XTERM).unwrap();
+        // Answered from the start: nothing to say.
+        assert_eq!(extension_report(None, &Ok(window.clone())), (Some(false), None));
+        assert_eq!(extension_report(None, &Ok(None)), (Some(false), None));
+        // Refused: said once, not again while it lasts.
+        assert_eq!(extension_report(Some(false), &Err(ExtensionError::NotAllowed)), (Some(true), Some(true)));
+        assert_eq!(extension_report(None, &Err(ExtensionError::NotAllowed)), (Some(true), Some(true)));
+        assert_eq!(extension_report(Some(true), &Err(ExtensionError::NotAllowed)), (Some(true), None));
+        // Answered again after a refusal: said once.
+        assert_eq!(extension_report(Some(true), &Ok(None)), (Some(false), Some(false)));
+        // Other failures change nothing the app is told.
+        for other in [ExtensionError::Absent, ExtensionError::Failed, ExtensionError::Bus, ExtensionError::Malformed] {
+            assert_eq!(extension_report(Some(true), &Err(other)), (Some(true), None), "{other:?}");
+            assert_eq!(extension_report(None, &Err(other)), (None, None), "{other:?}");
+        }
     }
 
     #[test]

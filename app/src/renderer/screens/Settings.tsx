@@ -1,11 +1,11 @@
 import type {ReactNode} from "react";
 import {useEffect, useState} from "react";
-import type {EngineStatus, SettingsProblem} from "../../shared/ipc";
+import type {EngineStatus, ExtensionState, SettingsProblem} from "../../shared/ipc";
 import {clave, useAsked} from "../bridge";
 import {Button, Field, Submit, useAction, useHeading} from "../components/Controls";
 import {EntryList} from "../components/EntryList";
 import {FLAVOUR} from "../../shared/flavour";
-import {COPY, privateWindowsLine, SETTINGS_PROBLEMS} from "../copy";
+import {COPY, LINUX_COPY, privateWindowsLine, SETTINGS_PROBLEMS} from "../copy";
 import type {Shell} from "../shell";
 
 /**
@@ -91,6 +91,8 @@ export function Settings({shell}: {shell: Shell}): ReactNode {
         <p className="actions"><Button label={COPY.settings.signOut} press={() => clave.signOut().then(shell.askStatus)} /></p>
       </div>
 
+      {appInfo.platform === "linux" ? <GnomeExtension shell={shell} /> : null}
+
       <DeleteAll shell={shell} />
 
       <div>
@@ -121,6 +123,39 @@ function Account({account}: {account: EngineStatus["account"]}): ReactNode {
       {account.handle !== null ? <div><dt>{COPY.settings.handle}</dt><dd>@{account.handle}</dd></div> : null}
       {account.email !== null ? <div><dt>{COPY.settings.email}</dt><dd>{account.email}</dd></div> : null}
     </dl>
+  );
+}
+
+/**
+ * Linux: the GNOME extension, which the design's uninstall path relies on (removing the app's
+ * package leaves a user's extension behind). Removing it is not irreversible — Home offers to install
+ * it again — so it is an ordinary button, not the oxide one, and asks once.
+ */
+function GnomeExtension({shell}: {shell: Shell}): ReactNode {
+  // What main says is there: Remove is offered only for an extension that is installed, and "Removed"
+  // is said only when main says it is gone (Task 7 review, M5).
+  const [state, setState] = useState<ExtensionState | null>(null);
+  const [outcome, setOutcome] = useState<"removed" | "failed" | null>(null);
+  useEffect(() => {
+    let live = true;
+    void clave.extension("check").then((next) => { if (live) setState(next); }, () => undefined);
+    return () => { live = false; };
+  }, []);
+  const remove = async () => {
+    const next = await clave.extension("remove");
+    setState(next);
+    setOutcome(next === "missing" ? "removed" : "failed");
+    shell.askStatus();
+  };
+  const installed = state !== null && state !== "missing";
+  return (
+    <div>
+      <hr className="divider" />
+      <p className="label">{LINUX_COPY.settings.label}</p>
+      <p className="note">{outcome === "removed" ? LINUX_COPY.settings.removed : LINUX_COPY.settings.lead}</p>
+      {outcome === "failed" ? <p className="problem">{LINUX_COPY.settings.removeFailed}</p> : null}
+      {installed ? <p className="actions"><Button label={LINUX_COPY.settings.remove} press={remove} /></p> : null}
+    </div>
   );
 }
 

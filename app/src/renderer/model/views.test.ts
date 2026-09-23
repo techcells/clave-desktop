@@ -4,8 +4,8 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import type {EngineStatus, NothingReadWhy, UserSettings} from "../../shared/ipc";
 import {NOTHING_READ_WHY} from "../../shared/ipc";
-import {APP_FILE, BLOCKERS, blockerCopy, checkingPermissionLine, CLAIMS, COPY, KNOWN_LIMITS, knownLimits, NOTHING_READ, PERMISSION_STEPS, privateWindowsLine, WINDOWS_COPY} from "../copy";
-import {downloadView, firstBlocker, gigabytes, isTranslocated, LONG_WAIT_MS, mustSignIn, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
+import {APP_FILE, BLOCKERS, blockerCopy, checkingPermissionLine, CLAIMS, COPY, KNOWN_LIMITS, knownLimits, LINUX_COPY, NOTHING_READ, PERMISSION_STEPS, privateWindowsLine, SIGN_IN_PROBLEMS, signInProblem, WINDOWS_COPY} from "../copy";
+import {downloadView, extensionProblem, firstBlocker, gigabytes, isTranslocated, LONG_WAIT_MS, mustSignIn, nothingReadLine, onboardingStep, reviewRows, startScreen, stillWaiting} from "./views";
 
 const status = (blockers: EngineStatus["blockers"], pending = 0): EngineStatus => ({capture: "off", resumeAt: null, blockers, extractionPaused: null, pending, waitingUpload: 0, nothingRead: null, checkingPermission: false, account: null});
 const settings = (onboardingStep: number): UserSettings => ({exclusions: [], excludedSites: [], reviewTime: "17:30", captureOn: false, onboardingStep});
@@ -28,7 +28,7 @@ describe("the pitch", () => {
 
   it("has a sentence and one fix button for every blocker", () => {
     for (const copy of Object.values(BLOCKERS)) { expect(copy.sentence.length).toBeGreaterThan(10); expect(copy.action.length).toBeGreaterThan(2); }
-    expect(Object.keys(BLOCKERS)).toHaveLength(10);
+    expect(Object.keys(BLOCKERS)).toHaveLength(15);
   });
 
   it("counts statements the way a person would in the notification and the tray", () => {
@@ -74,6 +74,24 @@ describe("onboarding", () => {
     expect(onboardingStep(status([]), settings(6))).toBe("done");
     expect(startScreen(status([]), settings(7))).toBe("home");
     expect(startScreen(status([], 2), settings(7))).toBe("review");
+  });
+
+  it("sends every GNOME extension blocker to the screen-sharing step, which has the extension as its first stage (Linux)", () => {
+    for (const blocker of ["EXTENSION_MISSING", "EXTENSION_OFF", "EXTENSIONS_OFF_IN_GNOME", "EXTENSION_NEEDS_LOGIN", "EXTENSION_UNSUPPORTED"] as const) {
+      expect(onboardingStep(status([blocker]), settings(1)), blocker).toBe("permission");
+      expect(onboardingStep(status([blocker]), settings(7)), blocker).toBe("permission");
+    }
+    // The model still comes first, as it does for the share itself.
+    expect(onboardingStep(status(["MODEL_MISSING", "EXTENSION_MISSING"]), settings(1))).toBe("model");
+  });
+
+  it("opens the extension's stage while any extension blocker stands, the share's once none does", () => {
+    expect(extensionProblem(["NO_PERMISSION"])).toBeNull();
+    expect(extensionProblem([])).toBeNull();
+    expect(extensionProblem(["EXTENSION_NEEDS_LOGIN", "NO_PERMISSION"])).toBe("EXTENSION_NEEDS_LOGIN");
+    expect(extensionProblem(["MODEL_PROBLEM", "EXTENSIONS_OFF_IN_GNOME"])).toBe("EXTENSIONS_OFF_IN_GNOME");
+    // The engine's order is kept: whatever it named first among them is the one to fix first.
+    expect(extensionProblem(["EXTENSION_OFF", "EXTENSION_MISSING"])).toBe("EXTENSION_OFF");
   });
 
   it("goes back to a machine-checked step when something was undone, however far the user had come", () => {
@@ -179,6 +197,92 @@ describe("the words for Windows", () => {
     }
     // Only NO_PERMISSION has Windows words; every other blocker reads the same everywhere.
     expect(blockerCopy("MODEL_MISSING", "windows")).toBe(BLOCKERS.MODEL_MISSING);
+  });
+});
+
+describe("the words for Linux", () => {
+  const linuxLines = [
+    blockerCopy("NO_PERMISSION", "linux").sentence, blockerCopy("NO_PERMISSION", "linux").action,
+    blockerCopy("PERMISSION_NEEDS_RESTART", "linux").sentence,
+    checkingPermissionLine("linux"), privateWindowsLine("linux"), ...knownLimits("linux"),
+    LINUX_COPY.permission.title, LINUX_COPY.permission.lead, LINUX_COPY.checkingOnboarding,
+    signInProblem("STORAGE_UNAVAILABLE", "linux")
+  ];
+
+  it("says nothing a Linux user cannot find: no System Settings, Screen Recording, macOS, Windows, Safari or Edge", () => {
+    for (const line of linuxLines) {
+      expect(line).not.toMatch(/System Settings|Screen Recording|menu bar|macOS|Applications|Safari|Windows|Edge|InPrivate/);
+    }
+  });
+
+  it("names screen sharing, which is what GNOME asks for and what its top bar shows", () => {
+    expect(blockerCopy("NO_PERMISSION", "linux").sentence).toContain("Screen sharing");
+    expect(blockerCopy("NO_PERMISSION", "linux").action).toBe("Share the screen");
+    expect(LINUX_COPY.permission.lead).toContain("GNOME");
+    expect(LINUX_COPY.permission.lead).toContain("keeps no picture");
+  });
+
+  it("names the browsers measured there, their rules, and keeps every other limit as it is", () => {
+    const line = privateWindowsLine("linux");
+    for (const word of ["Google Chrome", "Firefox", "private windows", "English", "never remember history"]) expect(line).toContain(word);
+    expect(knownLimits("linux")).toHaveLength(KNOWN_LIMITS.length);
+    expect(knownLimits("linux").filter((limit) => !KNOWN_LIMITS.includes(limit))).toEqual([LINUX_COPY.addressLimit]);
+    expect(LINUX_COPY.addressLimit).toContain("Firefox");
+  });
+
+  it("says why a sign-in could not be kept on Linux (no keyring), and the same as before elsewhere", () => {
+    expect(signInProblem("STORAGE_UNAVAILABLE", "linux")).toContain("keyring");
+    for (const platform of ["mac", "windows", undefined] as const) {
+      expect(signInProblem("STORAGE_UNAVAILABLE", platform)).toBe(SIGN_IN_PROBLEMS.STORAGE_UNAVAILABLE);
+    }
+    expect(signInProblem("BAD_CREDENTIALS", "linux")).toBe(SIGN_IN_PROBLEMS.BAD_CREDENTIALS);
+  });
+
+  it("walks the screen-sharing step in two stages, and says what the extension is and is not", () => {
+    const setup = LINUX_COPY.setup;
+    expect(setup.lead).toContain("GNOME");
+    expect([setup.stages.extension, setup.stages.share]).toEqual(["The GNOME extension", "Share the screen"]);
+    expect(Object.values(setup.marks)).toEqual(["Done", "Now", "Next"]);
+    // What it is for, and the promise that it answers nobody else.
+    expect(setup.extensionLead).toContain("which window is in front");
+    expect(setup.extensionLead).toContain("nobody else");
+    // A logout loses unsaved work elsewhere: the note says so before the button is pressed.
+    expect(setup.loginNote).toContain("Save your work");
+    expect(setup.loginNote).toContain("picks up where it stopped");
+    for (const line of [setup.lead, setup.extensionLead, setup.loginNote, LINUX_COPY.keyringNote, LINUX_COPY.settings.lead, LINUX_COPY.settings.removed]) {
+      expect(line).not.toMatch(/System Settings|Screen Recording|macOS|Windows|Safari/);
+    }
+  });
+
+  it("tells a Linux user before sign-in that GNOME may ask for the keyring's password", () => {
+    expect(LINUX_COPY.keyringNote).toContain("keyring");
+    expect(LINUX_COPY.keyringNote).toContain("password");
+  });
+
+  it("offers to remove the extension in Settings, saying that nothing is read without it", () => {
+    expect(LINUX_COPY.settings.label).toBe("GNOME extension");
+    expect(LINUX_COPY.settings.remove).toBe("Remove the GNOME extension");
+    expect(LINUX_COPY.settings.lead).toContain("which window is in front");
+    expect(LINUX_COPY.settings.removed).toContain("Nothing is read");
+  });
+
+  it("offers to switch GNOME's extensions on, saying that any others the user installed start too (Task 7 review I3)", () => {
+    expect(BLOCKERS.EXTENSIONS_OFF_IN_GNOME.action).toBe("Switch extensions on");
+    expect(BLOCKERS.EXTENSIONS_OFF_IN_GNOME.sentence).toContain("other extensions");
+    expect(BLOCKERS.EXTENSIONS_OFF_IN_GNOME.sentence).not.toContain("Extensions app");
+  });
+
+  it("says when an install or a removal did not happen, rather than nothing (Task 7 review M5)", () => {
+    expect(LINUX_COPY.setup.installFailed).toContain("could not be installed");
+    expect(LINUX_COPY.settings.removeFailed).toContain("could not be removed");
+  });
+
+  it("changes nothing for Windows", () => {
+    expect(blockerCopy("NO_PERMISSION", "windows")).toBe(WINDOWS_COPY.noPermission);
+    expect(blockerCopy("PERMISSION_NEEDS_RESTART", "windows")).toBe(BLOCKERS.PERMISSION_NEEDS_RESTART);
+    expect(privateWindowsLine("windows")).toBe(WINDOWS_COPY.privateWindows);
+    expect(checkingPermissionLine("windows")).toBe(WINDOWS_COPY.checkingHome);
+    expect(blockerCopy("MODEL_MISSING", "linux")).toBe(BLOCKERS.MODEL_MISSING);
   });
 });
 

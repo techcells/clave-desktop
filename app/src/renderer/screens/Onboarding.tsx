@@ -1,13 +1,14 @@
 import type {ReactNode} from "react";
 import {useEffect, useRef, useState} from "react";
-import type {Permission, SettingsProblem} from "../../shared/ipc";
+import type {Blocker, Permission, SettingsProblem} from "../../shared/ipc";
 import {clave, useDownload} from "../bridge";
 import {Unreachable} from "../components/Boundary";
 import {Button, Field, Meter, Submit, useAction, useHeading} from "../components/Controls";
 import {EntryList} from "../components/EntryList";
-import {APP_FILE, BLOCKERS, CLAIMS, COPY, downloadProblem, knownLimits, PERMISSION_STEPS, privateWindowsLine, SETTINGS_PROBLEMS, SIGN_IN_PROBLEMS, WINDOWS_COPY} from "../copy";
+import {APP_FILE, BLOCKERS, blockerCopy, CLAIMS, COPY, downloadProblem, knownLimits, LINUX_COPY, PERMISSION_STEPS, privateWindowsLine, SETTINGS_PROBLEMS, signInProblem, WINDOWS_COPY} from "../copy";
 import type {Step} from "../model/views";
-import {STEPS, downloadView, gigabytes, isTranslocated, stillWaiting} from "../model/views";
+import {STEPS, downloadView, extensionProblem, gigabytes, isTranslocated, stillWaiting} from "../model/views";
+import {fixAction} from "../model/controls";
 import type {Shell} from "../shell";
 
 /**
@@ -82,7 +83,7 @@ export function SignIn({shell, lead}: {shell: Shell; lead?: string}): ReactNode 
       const result = await clave.signInWithGoogle();
       // A wait the user ended themselves is not a failure to report; main answers it with the timeout code.
       const silent = result.ok || (result.code === "OAUTH_TIMEOUT" && cancelledByUser.current);
-      setProblem(silent ? null : SIGN_IN_PROBLEMS[result.code]);
+      setProblem(silent ? null : signInProblem(result.code, shell.appInfo.platform));
       if (!result.ok) heading.current?.focus();
     } finally {
       setInBrowser(false);
@@ -100,7 +101,7 @@ export function SignIn({shell, lead}: {shell: Shell; lead?: string}): ReactNode 
   const submit = async () => {
     try {
       const result = await clave.signIn(identifier, password);
-      setProblem(result.ok ? null : SIGN_IN_PROBLEMS[result.code]);
+      setProblem(result.ok ? null : signInProblem(result.code, shell.appInfo.platform));
     } finally {
       setPassword("");
       shell.askStatus();
@@ -133,6 +134,8 @@ export function SignIn({shell, lead}: {shell: Shell; lead?: string}): ReactNode 
           {inBrowser && <Button tone="quiet" label={COPY.common.cancel} press={cancelBrowser} />}
         </p>
       )}
+      {/* Linux: GNOME may ask for the keyring's password as the sign-in is saved; said before it happens. */}
+      {shell.appInfo.platform === "linux" ? <p className="note">{LINUX_COPY.keyringNote}</p> : null}
     </>
   );
 }
@@ -294,6 +297,15 @@ function PermissionAsk({shell}: {shell: Shell}): ReactNode {
       </>
     );
   }
+  if (shell.appInfo.platform === "linux") {
+    return (
+      <>
+        <h1 className="title" tabIndex={-1} ref={heading}>{LINUX_COPY.permission.title}</h1>
+        <p className="lede">{LINUX_COPY.setup.lead}</p>
+        <LinuxStages blockers={shell.status.blockers} needsRestart={needsRestart} />
+      </>
+    );
+  }
   return (
     <>
       <h1 className="title" tabIndex={-1} ref={heading}>{COPY.onboarding.screenRecording}</h1>
@@ -317,6 +329,87 @@ function PermissionAsk({shell}: {shell: Shell}): ReactNode {
             {waitedLong ? <p className="note">{COPY.onboarding.stillWaitingPermission}</p> : null}
           </>
         )}
+    </>
+  );
+}
+
+/**
+ * Linux's screen-sharing step, as a short ledger of two stages: the GNOME extension, then GNOME's
+ * Share dialog. Only the stage in hand opens, with its sentence and its one button; the other is a
+ * line with its mark. Which stage is in hand is read from the blockers, never stored, so a logout in
+ * the middle (the extension needs one) comes back to the right stage by itself.
+ */
+function LinuxStages({blockers, needsRestart}: {blockers: readonly Blocker[]; needsRestart: boolean}): ReactNode {
+  const problem = extensionProblem(blockers);
+  const {stages, marks} = LINUX_COPY.setup;
+  // When the stage in hand changes (the button that was pressed is gone with it), focus moves to the
+  // stage now in hand rather than falling to the page (Task 7 review, M10). Not on the first render:
+  // the step's heading has the focus then.
+  const inHand = useRef<HTMLLIElement | null>(null);
+  const first = useRef(true);
+  const stage = problem === null ? "share" : problem;
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    inHand.current?.focus();
+  }, [stage]);
+  return (
+    <ol className="stages">
+      <li className={problem === null ? "stage stage-done" : "stage stage-now"} tabIndex={problem === null ? undefined : -1} ref={problem === null ? undefined : inHand}>
+        <span className="stage-number" aria-hidden="true">1</span>
+        <span className="stage-name">{stages.extension}</span>
+        <span className="stage-mark">{problem === null ? marks.done : marks.now}</span>
+        {problem === null ? null : <div className="stage-body"><ExtensionStage problem={problem} /></div>}
+      </li>
+      <li className={problem === null ? "stage stage-now" : "stage stage-next"} tabIndex={problem === null ? -1 : undefined} ref={problem === null ? inHand : undefined}>
+        <span className="stage-number" aria-hidden="true">2</span>
+        <span className="stage-name">{stages.share}</span>
+        <span className="stage-mark">{problem === null ? marks.now : marks.next}</span>
+        {problem === null ? <div className="stage-body"><ShareStage needsRestart={needsRestart} /></div> : null}
+      </li>
+    </ol>
+  );
+}
+
+/** The extension's stage: what it is (first install only), what it needs now, and the one button. */
+function ExtensionStage({problem}: {problem: Blocker}): ReactNode {
+  const copy = blockerCopy(problem, "linux");
+  const [installFailed, setInstallFailed] = useState(false);
+  const press = (): Promise<unknown> => {
+    switch (fixAction(problem)) {
+      // An install that did not happen is said, not swallowed (Task 7 review, M5).
+      case "installExtension": return clave.extension("install").then((state) => setInstallFailed(state === "missing" || state === "outdated"));
+      case "logOut": return clave.extension("logOut");
+      case "enableExtensions": return clave.extension("enableAll");
+      default: return clave.extension("check");
+    }
+  };
+  return (
+    <>
+      <p className="stage-text">{problem === "EXTENSION_MISSING" ? LINUX_COPY.setup.extensionLead : copy.sentence}</p>
+      <p className="actions"><Button key={problem} tone="ink" label={copy.action} press={press} /></p>
+      {installFailed && fixAction(problem) === "installExtension" ? <p className="problem">{LINUX_COPY.setup.installFailed}</p> : null}
+      {problem === "EXTENSION_NEEDS_LOGIN" ? <p className="note">{LINUX_COPY.setup.loginNote}</p> : null}
+    </>
+  );
+}
+
+/** The share's stage: GNOME's own dialog, opened by the button and answered once. */
+function ShareStage({needsRestart}: {needsRestart: boolean}): ReactNode {
+  const restart = blockerCopy("PERMISSION_NEEDS_RESTART", "linux");
+  const share = blockerCopy("NO_PERMISSION", "linux");
+  if (needsRestart) {
+    return (
+      <>
+        <p className="stage-text">{restart.sentence}</p>
+        <p className="actions"><Button tone="ink" label={restart.action} press={() => clave.restartApp()} /></p>
+      </>
+    );
+  }
+  return (
+    <>
+      <p className="stage-text">{LINUX_COPY.permission.lead}</p>
+      <p className="actions"><Button tone="ink" label={share.action} press={() => clave.requestPermission()} /></p>
+      <p className="note">{LINUX_COPY.checkingOnboarding}</p>
     </>
   );
 }

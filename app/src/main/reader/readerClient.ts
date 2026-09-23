@@ -35,6 +35,11 @@ export interface ReaderClient extends Reader {
    * starts with none.
    */
   forgetGrant(): void;
+  /**
+   * Replace the helper with a fresh one, without blame (calls in flight finish first). Linux: the
+   * GNOME extension refuses a reader whose binary was replaced while it ran, and a fresh one is not.
+   */
+  restart(): void;
 }
 
 /** `frontWindow()` rejects with this when there is no helper to ask. See `frontWindow` below for why it must reject. */
@@ -73,6 +78,8 @@ export function createReaderClient(deps: {
   onEvent?: (event: ReaderClientEvent) => void;
   /** Protocol 3: a helper's fresh screen-share grant, for main to keep in place of the spent one. */
   onGrant?: (token: string) => void;
+  /** Protocol 4 (Linux): the GNOME extension started (`true`) or stopped (`false`) refusing a helper. */
+  onExtension?: (refused: boolean) => void;
 }): ReaderClient {
   let current: Helper | null = null;
   /** A planned restart in progress: the next helper, warming up while `current` still serves. */
@@ -257,6 +264,10 @@ export function createReaderClient(deps: {
     // Unreadable: whatever was asked has failed — and a helper on its way out has nothing left to wait for.
     if (!message) { settleAll(helper, "down"); leaveIfDrained(helper); tryPromote(); return; }
     if (message.kind === "focus") { if (helper === current && helper.ready) notifyFocus(); return; }
+    if (message.kind === "extension") {
+      try { deps.onExtension?.(message.refused); } catch { /* an observer must never break the reader */ }
+      return;
+    }
     if (message.kind === "grant") {
       if (message.token === null) return;           // a token main would not keep: ignored, nothing fails
       // Any live helper's token is the newest: the portal spent the previous one to make it. The other
@@ -401,6 +412,10 @@ export function createReaderClient(deps: {
     release(): void {
       released = true;
       for (const helper of readyHelpers()) send(helper, {op: "release"});
+    },
+
+    restart(): void {
+      for (const helper of [replacement, current]) if (helper) drain(helper);
     },
 
     forgetGrant(): void {

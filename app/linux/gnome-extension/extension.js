@@ -10,7 +10,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 
-import {mayAnswer, othersCover, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows} from './logic.js';
+import {mayAnswer, othersCover, parseReaderPath, readerPathFileIsSafe, shapeAnswer, shellCoversWindows, statusAnswer} from './logic.js';
 
 const OBJECT_PATH = '/com/clave/Focus';
 const INTERFACE = 'com.clave.Focus';
@@ -18,6 +18,7 @@ const NOT_ALLOWED = 'com.clave.Focus.Error.NotAllowed';
 const FAILED = 'com.clave.Focus.Error.Failed';
 const IFACE_XML = `<node><interface name="${INTERFACE}">
   <method name="Get"><arg type="s" direction="out" name="json"/></method>
+  <method name="Status"><arg type="s" direction="out" name="json"/></method>
   <signal name="FocusChanged"><arg type="t" name="window"/></signal>
 </interface></node>`;
 
@@ -134,6 +135,12 @@ export default class ClaveFocusExtension extends Extension {
             this._reader = sender;
             invocation.return_value(new GLib.Variant('(s)', [answer]));
         });
+    }
+
+    // Answered to anyone: only the version and the reader path loaded at login (logic.js), so the
+    // app can tell when a new login is needed after it installed or updated this extension.
+    Status() {
+        return statusAnswer(this.metadata.version, this._allowedReader);
     }
 
     /**

@@ -58,15 +58,25 @@ export interface ClaveBridge {
   /** Opens the bundled THIRD-PARTY-LICENSES.txt. The file exists only in packaged builds: a fixed code, never a path, says when it is not there. */
   openLicences(): Promise<OpenLicencesResult>;
   restartApp(): Promise<void>;
+  /** Linux: the GNOME extension. Its state after the action, or null where there is none (macOS, Windows). */
+  extension(action: ExtensionAction): Promise<ExtensionState | null>;
   onStatus(cb: (status: EngineStatus) => void): () => void;
   onDownload(cb: (state: DownloadState) => void): () => void;
 }
+
+/**
+ * Linux: what the GNOME extension that tells the reader which window is in front needs, if anything
+ * (`shell/gnomeExtension.ts` has what each means), and what the window may ask of it.
+ */
+export type ExtensionState = "ready" | "missing" | "outdated" | "extensionsOff" | "disabled" | "unsupported" | "needsLogin";
+export const EXTENSION_ACTIONS = ["install", "remove", "logOut", "check", "enableAll"] as const;
+export type ExtensionAction = typeof EXTENSION_ACTIONS[number];
 
 /** Every request channel, in one list. The router refuses anything else. */
 export const INVOKE_CHANNELS = [
   "status", "review", "approve", "reject", "setCapture", "pauseForAnHour", "signIn", "signInWithGoogle", "cancelGoogleSignIn", "signOut", "settings", "settingsOpened",
   "updateSettings", "selfTest", "recheckPermission", "requestPermission", "retry", "deleteAllData", "downloadState",
-  "downloadStart", "downloadPause", "recentApp", "appInfo", "openWhatLeaves", "openLicences", "restartApp"
+  "downloadStart", "downloadPause", "recentApp", "appInfo", "openWhatLeaves", "openLicences", "restartApp", "extension"
 ] as const;
 export type InvokeChannel = typeof INVOKE_CHANNELS[number];
 

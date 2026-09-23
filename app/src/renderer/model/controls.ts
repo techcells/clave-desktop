@@ -25,7 +25,11 @@ export const statusSignature = (status: EngineStatus): string => JSON.stringify(
  * stands again instead of pretending the user can force either one.
  */
 export type FixAction =
-  | "signIn" | "download" | "selfTest" | "permission" | "restart" | "settings" | "retryModel" | "retryReader" | "reread";
+  | "signIn" | "download" | "selfTest" | "permission" | "restart" | "settings" | "retryModel" | "retryReader" | "reread"
+  // Linux: the GNOME extension. Installing again also switches it back on; GNOME's own switch for all
+  // extensions is switched on only on the user's press (owner, Task 7 review I3); an unsupported GNOME
+  // is the user's to change, so its button looks again.
+  | "installExtension" | "logOut" | "enableExtensions" | "checkExtension";
 
 export const FIX_ACTIONS: Record<Blocker, FixAction> = {
   SIGNED_OUT: "signIn",
@@ -37,7 +41,12 @@ export const FIX_ACTIONS: Record<Blocker, FixAction> = {
   SETTINGS_NEED_REVIEW: "settings",
   MODEL_PROBLEM: "retryModel",
   READER_PROBLEM: "retryReader",
-  STORAGE_PROBLEM: "reread"
+  STORAGE_PROBLEM: "reread",
+  EXTENSION_MISSING: "installExtension",
+  EXTENSION_OFF: "installExtension",
+  EXTENSIONS_OFF_IN_GNOME: "enableExtensions",
+  EXTENSION_NEEDS_LOGIN: "logOut",
+  EXTENSION_UNSUPPORTED: "checkExtension"
 };
 
 export const fixAction = (blocker: Blocker): FixAction => FIX_ACTIONS[blocker];

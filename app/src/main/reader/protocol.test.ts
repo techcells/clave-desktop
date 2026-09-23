@@ -84,4 +84,12 @@ describe("reader protocol 3: the screen-share grant", () => {
     expect(parseLine('{"event":"grant"}')).toEqual({kind: "grant", token: null});
     expect(parseLine('{"event":"grant","token":7}')).toEqual({kind: "grant", token: null});
   });
+
+  it("reads protocol 4's extension event: refused or not, and nothing else passes as one", () => {
+    expect(parseLine('{"event":"extension","refused":true}')).toEqual({kind: "extension", refused: true});
+    expect(parseLine('{"event":"extension","refused":false}')).toEqual({kind: "extension", refused: false});
+    for (const bad of ['{"event":"extension"}', '{"event":"extension","refused":"yes"}', '{"event":"extension","refused":1}']) {
+      expect(parseLine(bad), bad).toBeNull();
+    }
+  });
 });
