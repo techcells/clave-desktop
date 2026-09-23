@@ -34,7 +34,7 @@ describe("shipList: what from dist/ goes into the asar", () => {
     expect(r.helper).toBe("native/clave-reader");
     expect(r.ship).toEqual([
       "WHAT-LEAVES.md", "build.json", "main.cjs", "model-host.mjs", "preload.cjs",
-      "renderer/assets/font-abc.woff2", "renderer/index.html", "renderer/main.css", "renderer/main.js", "standins-taxonomy.json", "tray.png"
+      "renderer/assets/font-abc.woff2", "renderer/index.html", "renderer/main.css", "renderer/main.js", "tray.png"
     ]);
     expect(r.ship).not.toContain("reader-eval.cjs");
     expect(r.ship).not.toContain("eval-gate.mjs");
@@ -47,11 +47,13 @@ describe("shipList: what from dist/ goes into the asar", () => {
     expect(shipList(COMPLETE.filter((f) => f !== "bundled-packages.json"), "release").error).toEqual({code: "DIST_INCOMPLETE", path: "bundled-packages.json"});
   });
 
-  it("the stub's taxonomy ships for dev and internal, not for release", () => {
+  it("the stub's taxonomy ships only for dev: internal and release both run the real backend", () => {
     expect(shipList(COMPLETE, "dev").ship).toContain("standins-taxonomy.json");
-    expect(shipList(COMPLETE, "release").ship).not.toContain("standins-taxonomy.json");
-    expect(shipList(COMPLETE.filter((f) => f !== "standins-taxonomy.json"), "release").error).toBeUndefined();
-    expect(shipList(COMPLETE.filter((f) => f !== "standins-taxonomy.json"), "internal").error).toEqual({code: "DIST_INCOMPLETE", path: "standins-taxonomy.json"});
+    for (const flavour of ["internal", "release"]) {
+      expect(shipList(COMPLETE, flavour).ship, flavour).not.toContain("standins-taxonomy.json");
+      expect(shipList(COMPLETE.filter((f) => f !== "standins-taxonomy.json"), flavour).error, flavour).toBeUndefined();
+    }
+    expect(shipList(COMPLETE.filter((f) => f !== "standins-taxonomy.json"), "dev").error).toEqual({code: "DIST_INCOMPLETE", path: "standins-taxonomy.json"});
   });
 
   it("refuses a file nobody listed: a new build output is decided here before it can ship", () => {

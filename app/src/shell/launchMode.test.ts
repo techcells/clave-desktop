@@ -7,9 +7,9 @@ const all = Object.fromEntries(DEV_SWITCHES.map((name) => [name, "1"]));
 const env = (values: Record<string, string> = {}, packaged = false) => devEnv(values, packaged);
 
 describe("launch mode", () => {
-  it("packaged internal: stand-in API, real reader, real model, no smoke, not production", () => {
+  it("packaged internal: the real client (so real and Google sign-in), the real reader, the real model, production", () => {
     expect(launchMode({packaged: true, flavour: "internal", env: env(all, true)}))
-      .toEqual({standIns: true, scriptedModel: false, smoke: false, realReader: true, realApi: false, production: false, refuse: null});
+      .toEqual({standIns: false, scriptedModel: false, smoke: false, realReader: true, realApi: true, production: true, refuse: null});
   });
 
   it("packaged release: the real client, the real reader, the real model, production", () => {
@@ -17,8 +17,8 @@ describe("launch mode", () => {
       .toEqual({standIns: false, scriptedModel: false, smoke: false, realReader: true, realApi: true, production: true, refuse: null});
   });
 
-  it("a packaged build with any other flavour value behaves like release, never like internal", () => {
-    for (const flavour of FLAVOURS.filter((f) => f !== "internal")) {
+  it("every packaged flavour runs the same way: no packaged build ever runs a stand-in", () => {
+    for (const flavour of FLAVOURS) {
       expect(launchMode({packaged: true, flavour, env: env(all, true)}), flavour).toEqual(launchMode({packaged: true, flavour: "release", env: env(all, true)}));
     }
   });

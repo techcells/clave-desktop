@@ -5,11 +5,14 @@ import type {DevEnv} from "./devEnv";
  * What a launch runs with, decided from the build flavour and the development switches, in one pure
  * function so the rule is tested without Electron.
  *
- * Packaged builds: `devEnv` has already blanked every switch, so only the flavour speaks. `internal`
- * is the owner's own build — stand-in API (nothing leaves the machine), real reader, real model, never
- * the smoke run. `release` is the build strangers install: the real clave-back client, the real
- * reader, the real model. `dev` packaged is not a thing (the build script refuses it); it is treated
- * like `release` so a garbled define can never run stand-ins in a packaged app.
+ * Packaged builds: `devEnv` has already blanked every switch, and every packaged build runs the same
+ * way: the real clave-back client (production, `apiUrl.ts`) with real and Google sign-in, the real
+ * reader, the real model, never a stand-in and never the smoke run. `internal` used to keep the stub
+ * backend, so its sign-in accepted any password and nothing reached Clave; since 2026-09-23 (owner
+ * decision) it differs from `release` only in its name, bundle id and signing rules, so an internal
+ * build can be signed in with a real account on either platform. `dev` packaged is not a thing (the
+ * build script refuses it); it gets the same answer, so a garbled define can never run stand-ins in a
+ * packaged app.
  *
  * Unpackaged: the switches as before, plus `CLAVE_REAL_API=1`, which swaps the real client in beside
  * the stand-in reader and model (`start:api`) so the backend can be exercised without a screen. No
@@ -30,10 +33,9 @@ export interface LaunchMode {
 }
 
 export function launchMode(input: {packaged: boolean; flavour: Flavour; env: DevEnv}): LaunchMode {
-  const {packaged, flavour, env} = input;
+  const {packaged, env} = input;
   if (packaged) {
-    const internal = flavour === "internal";
-    return {standIns: internal, scriptedModel: false, smoke: false, realReader: true, realApi: !internal, production: !internal, refuse: null};
+    return {standIns: false, scriptedModel: false, smoke: false, realReader: true, realApi: true, production: true, refuse: null};
   }
   const standIns = env.CLAVE_STANDINS === "1";
   const smoke = standIns && env.CLAVE_SMOKE === "1";

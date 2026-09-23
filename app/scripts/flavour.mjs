@@ -4,8 +4,9 @@
 // app reads is a development switch that is inert once packaged, see src/shell/devEnv.ts).
 //
 //   dev       today's build, run unpackaged from the checkout or the thin dev bundle (the default)
-//   internal  a packaged build with the real reader and model beside the stub backend: nothing is
-//             uploaded; for the owner, a few trusted people and the permission measurements
+//   internal  a packaged test build for the owner, a few trusted people and the permission
+//             measurements: the real backend, reader and model, like release, under its own name and
+//             bundle id, and allowed to be unsigned or self-signed (stub backend until 2026-09-23)
 //   release   the packaged build strangers install
 //
 // Pure: no filesystem, no process, nothing at import. scripts/build.mjs is the only caller that acts

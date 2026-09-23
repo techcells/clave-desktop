@@ -27,7 +27,11 @@ export const FLAVOURS = ["dev", "internal", "release"];
 
 /** dist/ files that ship in every flavour. */
 export const DIST_ALWAYS = ["main.cjs", "preload.cjs", "model-host.mjs", "WHAT-LEAVES.md", "build.json", "tray.png"];
-/** dist/ files that ship only where the stub backend runs (dev and internal): the stub's public skills list. */
+/**
+ * dist/ files that ship only where the stub backend runs: the stub's public skills list. That is the
+ * unpackaged dev build alone since 2026-09-23, when internal builds moved to the real backend, so no
+ * packaged build ships it.
+ */
 export const DIST_STANDINS_ONLY = ["standins-taxonomy.json"];
 /** dist/ files that never ship: the staged-window harness and the plain-Node release gate. */
 export const DIST_NEVER = ["reader-eval.cjs", "eval-gate.mjs"];
@@ -126,10 +130,10 @@ export function shipList(distFiles, flavour, platform = "darwin") {
     if (path.startsWith("native/")) return {error: {code: "UNEXPECTED_DIST_FILE", path}};
     if (path.startsWith("renderer/")) { ship.push(path); continue; }
     if (DIST_ALWAYS.includes(path)) { ship.push(path); continue; }
-    if (DIST_STANDINS_ONLY.includes(path)) { if (flavour !== "release") ship.push(path); continue; }
+    if (DIST_STANDINS_ONLY.includes(path)) { if (flavour === "dev") ship.push(path); continue; }
     return {error: {code: "UNEXPECTED_DIST_FILE", path}};
   }
-  const required = [...DIST_ALWAYS, ...RENDERER_REQUIRED, ...(flavour === "release" ? [] : DIST_STANDINS_ONLY)];
+  const required = [...DIST_ALWAYS, ...RENDERER_REQUIRED, ...(flavour === "dev" ? DIST_STANDINS_ONLY : [])];
   for (const path of required) if (!ship.includes(path)) return {error: {code: "DIST_INCOMPLETE", path}};
   if (helper === null) return {error: {code: "DIST_INCOMPLETE", path: HELPER_IN_DIST}};
   for (const path of DIST_STAGING_ONLY) if (!consumed.includes(path)) return {error: {code: "DIST_INCOMPLETE", path}};

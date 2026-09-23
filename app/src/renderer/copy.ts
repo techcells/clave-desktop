@@ -221,8 +221,12 @@ export const COPY = {
     accountUnknown: "Signed in. Your name and email will show once the app reaches Clave.",
     version: "Version", modelHash: "Model",
     licences: "Third-party licences", licencesMissing: "The licence file is not part of this build.",
-    /** The internal flavour's one permanent line (packaging design, section 2): it uploads nothing. */
-    internalBuild: "Internal build. Nothing is uploaded; approved statements stay in a local file.",
+    /**
+     * The internal flavour's one permanent line (packaging design, section 2). It used to promise that
+     * nothing is uploaded, which was true of the stub backend it ran until 2026-09-23; it now signs in
+     * to the real Clave and uploads what is approved, exactly as the release does, and says so.
+     */
+    internalBuild: "Internal build, for testing. It signs in to your Clave account and uploads the statements you approve, as the release does.",
     internalMark: "internal build",
     deleteWarning: "Every statement, the sent log and your sign-in are removed from this machine. This cannot be undone.",
     deleteConfirm: "Yes, delete everything", deleted: "Everything local was deleted."}

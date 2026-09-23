@@ -58,9 +58,9 @@ const RENDERER_URL = pathToFileURL(here("renderer/index.html")).toString();
  * Every environment switch is a development switch and `devEnv` hands back nothing at all once the
  * app is packaged, so a packaged build cannot be talked into stand-ins, a scripted model, a
  * different data folder or a different model URL by whoever started it. What a packaged build runs
- * with is decided by the flavour baked in at build time (`launchMode`): `internal` keeps the stub
- * backend beside the real reader and model; `release` runs the real clave-back client, reader and
- * model. `createEngine` refuses stand-ins when `production` as well.
+ * with is decided by `launchMode`: every packaged build, `internal` and `release` alike, runs the real
+ * clave-back client (with Google sign-in), reader and model. `createEngine` refuses stand-ins when
+ * `production` as well.
  */
 const DEV = !app.isPackaged;
 const ENV = devEnv(process.env, !DEV);
