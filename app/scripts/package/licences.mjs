@@ -14,10 +14,10 @@ import {fileURLToPath} from "node:url";
 import {walk} from "./walk.mjs";
 
 /** Licences a component may carry. Anything else, and anything missing, fails the build. */
-export const ALLOWED = ["MIT", "MIT-0", "ISC", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "Apache-2.0", "BlueOak-1.0.0", "CC0-1.0", "Unlicense", "Zlib"];
+export const ALLOWED = ["MIT", "MIT-0", "ISC", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "Apache-2.0", "BlueOak-1.0.0", "CC0-1.0", "Unlicense", "Zlib", "Unicode-3.0"];
 
 /** When a component offers a choice (`A OR B`), the one this distribution takes: first match wins. */
-export const PREFERENCE = ["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "Zlib", "Unlicense", "CC0-1.0", "MIT-0", "BlueOak-1.0.0", "Apache-2.0"];
+export const PREFERENCE = ["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "Zlib", "Unlicense", "CC0-1.0", "MIT-0", "BlueOak-1.0.0", "Apache-2.0", "Unicode-3.0"];
 
 /**
  * A package.json's licence as one SPDX-style string, or `null`. Accepts `license: "MIT"`,
@@ -37,22 +37,58 @@ export function licenceField(pkg) {
 
 /**
  * The licence this distribution takes from an SPDX expression, or `null` when the expression is
- * not acceptable. `A OR B`: the first allowed alternative in PREFERENCE order. `A AND B`: allowed
- * only if every part is, reported as the joined expression. Parentheses are ignored; `WITH`
- * exceptions and anything unknown make the expression unacceptable.
+ * not acceptable. Read as SPDX reads it: parentheses group, AND binds tighter than OR.
+ * `A OR B`: the first acceptable alternative, a single licence in PREFERENCE order before a compound
+ * one. `A AND B`: acceptable only if every part is, reported as the parts joined with AND. A `WITH`
+ * exception is never taken: an alternative carrying one is skipped when the OR offers another
+ * (rustix's `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` is taken as MIT), and anywhere else
+ * it makes the expression unacceptable, like anything unknown or malformed.
  */
 export function chosenLicence(expression) {
   if (typeof expression !== "string") return null;
-  const cleaned = expression.replace(/[()]/g, " ").trim();
-  if (!cleaned || /\bWITH\b/.test(cleaned)) return null;
-  if (/\bAND\b/.test(cleaned)) {
-    const parts = cleaned.split(/\s+AND\s+/).map((p) => p.trim());
-    return parts.every((p) => ALLOWED.includes(p)) ? parts.join(" AND ") : null;
-  }
-  const options = cleaned.split(/\s+OR\s+/).map((p) => p.trim());
-  if (options.some((o) => !/^[A-Za-z0-9.+-]+$/.test(o))) return null;
-  for (const preferred of PREFERENCE) if (options.includes(preferred)) return preferred;
-  return null;
+  const tokens = expression.match(/\(|\)|[^\s()]+/g) ?? [];
+  let at = 0;
+  const peek = () => tokens[at];
+  const fail = Symbol("fail");
+  // Each parse returns the chosen text, `null` (well formed, not acceptable) or `fail` (malformed).
+  const atom = () => {
+    if (peek() === "(") {
+      at += 1;
+      const inner = or();
+      if (inner === fail || peek() !== ")") return fail;
+      at += 1;
+      return inner;
+    }
+    const id = peek();
+    if (id === undefined || !/^[A-Za-z0-9.+-]+$/.test(id) || ["AND", "OR", "WITH"].includes(id)) return fail;
+    at += 1;
+    if (peek() === "WITH") {
+      at += 1;
+      const exception = peek();
+      if (exception === undefined || !/^[A-Za-z0-9.+-]+$/.test(exception) || ["AND", "OR", "WITH"].includes(exception)) return fail;
+      at += 1;
+      return null;
+    }
+    return ALLOWED.includes(id) ? id : null;
+  };
+  const and = () => {
+    const parts = [atom()];
+    while (peek() === "AND") { at += 1; parts.push(atom()); }
+    if (parts.includes(fail)) return fail;
+    return parts.includes(null) ? null : [...new Set(parts.flatMap((p) => p.split(" AND ")))].join(" AND ");
+  };
+  const or = () => {
+    const options = [and()];
+    while (peek() === "OR") { at += 1; options.push(and()); }
+    if (options.includes(fail)) return fail;
+    const acceptable = options.filter((o) => o !== null);
+    for (const preferred of PREFERENCE) if (acceptable.includes(preferred)) return preferred;
+    return acceptable[0] ?? null;
+  };
+  let chosen;
+  try { chosen = or(); } catch { return null; }            // absurd nesting: refused, never thrown
+  if (chosen === fail || at !== tokens.length) return null;
+  return chosen;
 }
 
 /**
@@ -181,6 +217,24 @@ export function runtimeEntry(fixed, runtime) {
   return {entry: {name: fixed.name, version: runtime.version, files: [...runtime.files], licence: fixed.licence, copyright: fixed.copyright ?? "", source: fixed.source, note: fixed.note}};
 }
 
+/**
+ * The recognition models a system's package ships (`licences.fixed.json` `recognitionModels`, each
+ * naming its `platforms`): today Tesseract's two `tessdata_best` models, Linux only. An entry missing
+ * any of its facts is a refusal, so a model can never ship without its line in the licence file.
+ */
+export function recognitionEntries(fixed, platform) {
+  if (fixed === undefined || fixed === null) return {entries: []};
+  if (!Array.isArray(fixed)) return {error: "RECOGNITION_ENTRY_INVALID", detail: "list"};
+  const entries = [];
+  for (const e of fixed) {
+    for (const key of ["name", "version", "source", "licence"]) if (typeof e?.[key] !== "string" || !e[key].trim()) return {error: "RECOGNITION_ENTRY_INVALID", detail: key};
+    if (!Array.isArray(e.files) || e.files.length === 0 || !e.files.every((f) => typeof f === "string" && f)) return {error: "RECOGNITION_ENTRY_INVALID", detail: "files"};
+    if (!Array.isArray(e.platforms) || e.platforms.length === 0) return {error: "RECOGNITION_ENTRY_INVALID", detail: "platforms"};
+    if (e.platforms.includes(platform)) entries.push({name: e.name, version: e.version, files: [...e.files], licence: e.licence, copyright: e.copyright, source: e.source});
+  }
+  return {entries};
+}
+
 /** The model's paragraph, or a refusal for a release build whose model licence is not confirmed. */
 export function modelSection(model, flavour) {
   if (!model || typeof model.name !== "string") return {error: "MODEL_ENTRY_MISSING"};
@@ -196,7 +250,7 @@ const RULE = "-".repeat(72);
 
 /**
  * The whole file, or a refusal. `sections` is `{app, electron, packages, crates, components, model,
- * texts}` where packages/crates/components are entries `{name, version, licence, text?, copyright?,
+ * texts}` (plus optional `runtimes` and `recognition`) where packages/crates/components are entries `{name, version, licence, text?, copyright?,
  * source?}`. Entries without their own text are followed by a reference to the appendix, which holds
  * each chosen licence's standard text once; a chosen licence with no standard text on file is a
  * refusal (`APPENDIX_TEXT_MISSING`), never a dangling reference. Deterministic: sorted by name, no
@@ -216,7 +270,12 @@ export function render(sections) {
       lines.push(`Licence: ${e.licence}${chosen !== e.licence ? ` (distributed here under ${chosen})` : ""}`);
       if (e.copyright) lines.push(e.copyright);
       if (e.text) lines.push("", e.text);
-      else { lines.push(`(standard ${chosen} text: see the appendix)`); needed.add(chosen); }
+      else {
+        // An AND takes several licences: each text is pointed at, and each goes into the appendix once.
+        const parts = String(chosen).split(" AND ");
+        lines.push(parts.length > 1 ? `(standard ${parts.join(" and ")} texts: see the appendix)` : `(standard ${chosen} text: see the appendix)`);
+        for (const part of parts) needed.add(part);
+      }
       lines.push("");
     }
   };
@@ -232,6 +291,7 @@ export function render(sections) {
     }
   }
   block("Native reader helper: Rust crates (statically linked)", sections.crates);
+  if (Array.isArray(sections.recognition) && sections.recognition.length > 0) block("Text recognition models (bundled, Linux)", sections.recognition);
   block("JavaScript packages", sections.packages);
   lines.push(RULE, "Language model (downloaded at set-up, not bundled)", RULE, "", sections.model, "");
   const missing = [...needed].filter((n) => typeof sections.texts?.[n] !== "string" || !sections.texts[n].trim()).sort();
@@ -253,7 +313,7 @@ const FIXED_PATH = join(dirname(fileURLToPath(import.meta.url)), "licences.fixed
  * Reads everything, checks it, renders it. Returns `{text, electronFiles}` or `{error, detail}`.
  * `root` is the staged asar root; `appDir` the checkout's app/; `cargo` the absolute cargo path.
  */
-export function generateLicences({root, appDir, flavour, cargo, env, rustTarget = "aarch64-apple-darwin", runtime = null}) {
+export function generateLicences({root, appDir, flavour, cargo, env, rustTarget = "aarch64-apple-darwin", runtime = null, platform = "darwin"}) {
   const fixed = JSON.parse(readFileSync(FIXED_PATH, "utf8"));
   const appPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const files = walk(root).filter((e) => e.kind === "file").map((e) => e.rel);
@@ -323,11 +383,13 @@ export function generateLicences({root, appDir, flavour, cargo, env, rustTarget 
   if (model.error) return {error: model.error};
   const system = runtimeEntry(fixed.runtimes?.msvc, runtime);
   if (system.error) return {error: system.error};
+  const recognition = recognitionEntries(fixed.recognitionModels, platform);
+  if (recognition.error) return {error: recognition.error, detail: recognition.detail};
 
-  const problems = checkEntries([electron, ...components, ...crates, ...packages]);
+  const problems = checkEntries([electron, ...components, ...crates, ...packages, ...recognition.entries]);
   if (problems.length > 0) return {error: problems[0].code, detail: `${problems[0].name}${problems[0].licence ? ` (${problems[0].licence})` : ""}`};
 
-  const rendered = render({app: {name: appPackage.name, version: appPackage.version}, electron, packages, crates, components, runtimes: system.entry ? [system.entry] : [], model: model.text, texts: fixed.texts ?? {}});
+  const rendered = render({app: {name: appPackage.name, version: appPackage.version}, electron, packages, crates, components, runtimes: system.entry ? [system.entry] : [], recognition: recognition.entries, model: model.text, texts: fixed.texts ?? {}});
   if (rendered.error) return {error: rendered.error, detail: rendered.detail};
   const clean = cleanText(rendered.text);
   if (clean === null) return {error: "LICENCE_TEXT_UNREADABLE", detail: "rendered"};

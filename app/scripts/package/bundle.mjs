@@ -7,17 +7,18 @@
 // Every decision is a pure function, tested in bundle.test.ts; `bundle()` is the only impure part and
 // the program half is gated on the script's own basename, so importing this never packages anything.
 import {execFileSync} from "node:child_process";
-import {chmodSync, cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync} from "node:fs";
+import {createHash} from "node:crypto";
+import {chmodSync, cpSync, mkdirSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync} from "node:fs";
 import {createRequire} from "node:module";
 import {homedir} from "node:os";
 import {basename, dirname, join, posix} from "node:path";
 import {fileURLToPath, pathToFileURL} from "node:url";
 import {runningAppCheck} from "../dev-bundle.mjs";
-import {requestedFlavour, resolveOut} from "./stage.mjs";
+import {BUNDLE_IDS, checkModels, requestedFlavour, resolveOut} from "./stage.mjs";
 import {walk} from "./walk.mjs";
 
-/** The bundle ids (design section 2). `dev` is never packaged: it is the checkout's unpackaged run. */
-export const BUNDLE_IDS = {internal: "dev.clave.agent.internal", release: "dev.clave.agent"};
+/** The bundle ids (design section 2), kept in stage.mjs since the Linux desktop name needs them there. */
+export {BUNDLE_IDS};
 
 /**
  * Keys Electron's template Info.plist carries that are UNTRUE for this app and would suggest
@@ -44,14 +45,37 @@ export const ASAR_UNPACK = {unpack: "*.node", unpackDir: "node_modules/{node-lla
 export const UNPACKED_ROOTS = ["node_modules/node-llama-cpp", "node_modules/@node-llama-cpp/mac-arm64-metal"];
 /** The same on Windows: node-llama-cpp and its two x64 builds (`stage.mjs` TARGETS.win32). */
 export const WIN_UNPACKED_ROOTS = ["node_modules/node-llama-cpp", "node_modules/@node-llama-cpp/win-x64", "node_modules/@node-llama-cpp/win-x64-vulkan"];
-const unpackedRootsFor = (platform) => (platform === "win32" ? WIN_UNPACKED_ROOTS : UNPACKED_ROOTS);
+const unpackedRootsFor = (platform, arch) => (platform === "win32" ? WIN_UNPACKED_ROOTS : platform === "linux" ? LINUX_UNPACKED_ROOTS[arch] ?? [] : UNPACKED_ROOTS);
 
-/** Electron's platform and arch in its zip names and in packager's options, per system packaged. */
-export const ELECTRON_TARGETS = {darwin: {platform: "darwin", arch: "arm64"}, win32: {platform: "win32", arch: "x64"}};
+/**
+ * Electron's platform and arch in its zip names and in packager's options, per system packaged. Linux
+ * has one per architecture (x64 public, arm64 internal), chosen by the build machine's own.
+ */
+export const ELECTRON_TARGETS = {
+  darwin: {platform: "darwin", arch: "arm64"},
+  win32: {platform: "win32", arch: "x64"},
+  linux: {x64: {platform: "linux", arch: "x64"}, arm64: {platform: "linux", arch: "arm64"}}
+};
+
+/** The Electron build for a system, or `null`. Linux needs a known `arch`; the others ignore it. */
+export function electronTargetFor(platform, arch) {
+  if (!Object.hasOwn(ELECTRON_TARGETS, platform)) return null;
+  const entry = ELECTRON_TARGETS[platform];
+  if (typeof entry.platform === "string") return entry;
+  return typeof arch === "string" && Object.hasOwn(entry, arch) ? entry[arch] : null;
+}
+
+/** node-llama-cpp and the Linux builds of that architecture (`stage.mjs` TARGETS.linux). */
+export const LINUX_UNPACKED_ROOTS = {
+  x64: ["node_modules/node-llama-cpp", "node_modules/@node-llama-cpp/linux-x64", "node_modules/@node-llama-cpp/linux-x64-vulkan"],
+  arm64: ["node_modules/node-llama-cpp", "node_modules/@node-llama-cpp/linux-arm64"]
+};
 
 /** What the asar must and must not hold (posix paths as @electron/asar lists them, leading slash). */
 export const ASAR_REQUIRED = ["/package.json", "/dist/main.cjs", "/dist/preload.cjs", "/dist/model-host.mjs", "/dist/renderer/index.html", "/dist/renderer/main.js", "/dist/WHAT-LEAVES.md", "/dist/THIRD-PARTY-LICENSES.txt"];
 export const ASAR_FORBIDDEN = ["/dist/reader-eval.cjs", "/dist/eval-gate.mjs"];
+/** Linux also carries the GNOME extension the app installs from inside the asar (`app.ts`, `here("gnome-extension")`). */
+export const LINUX_ASAR_REQUIRED = [...ASAR_REQUIRED, "/dist/gnome-extension/extension.js", "/dist/gnome-extension/logic.js", "/dist/gnome-extension/metadata.json"];
 
 export function bundleIdFor(flavour) {
   return Object.hasOwn(BUNDLE_IDS, flavour) ? BUNDLE_IDS[flavour] : null;
@@ -70,8 +94,9 @@ export function pgrepPattern(path) {
 }
 
 /** Among candidate paths, the cached Electron zip for this version and system (macOS arm64 by default), or null. */
-export function findElectronZip(candidates, version, platform = "darwin") {
-  const target = ELECTRON_TARGETS[platform] ?? ELECTRON_TARGETS.darwin;
+export function findElectronZip(candidates, version, platform = "darwin", arch = undefined) {
+  const target = Object.hasOwn(ELECTRON_TARGETS, platform) ? electronTargetFor(platform, arch) : ELECTRON_TARGETS.darwin;
+  if (target === null) return null;
   const wanted = `electron-v${version}-${target.platform}-${target.arch}.zip`;
   return candidates.map((p) => p.split("\\").join("/")).find((p) => posix.basename(p) === wanted) ?? null;
 }
@@ -172,11 +197,101 @@ export function checkWinBundle({listing, versionInfo, asarFiles, unpacked, optio
   return problems;
 }
 
-/** The asar and unpacked-folder rules both systems share. */
-function checkAsar({asarFiles, unpacked, platform}) {
+/**
+ * The Linux executable's file name: the package name, lower case without spaces, as Linux programs
+ * are named (the app's NAME stays "Clave Agent": the desktop entry carries it). `null` for dev.
+ */
+export function linuxExecutableName(flavour) {
+  return Object.hasOwn(BUNDLE_IDS, flavour) ? (flavour === "internal" ? "clave-agent-internal" : "clave-agent") : null;
+}
+
+/**
+ * The @electron/packager options for Linux: the same asar, licences and identity as the others. No
+ * icon (packager takes none on Linux; the package installs one for the desktop entry) and no asar
+ * integrity digest: Electron validates asar integrity on macOS and Windows only, and on Linux the
+ * files under /opt are root's, which is the protection there.
+ */
+export function linuxPackagerOptions({flavour, info, stagingDir, outDir, electronVersion, electronZipDir, entity, arch}) {
+  if (bundleIdFor(flavour) === null) return {error: "DEV_FLAVOUR_NOT_PACKAGED"};
+  if (electronTargetFor("linux", arch) === null) return {error: "UNSUPPORTED_ARCH"};
+  // arm64 is the internal build for the arm64 VM only (design decision 3): never a release.
+  if (arch === "arm64" && flavour === "release") return {error: "ARM64_IS_INTERNAL_ONLY"};
+  if (!info || info.flavour !== flavour) return {error: "STAGING_FLAVOUR_MISMATCH"};
+  if (typeof info.appName !== "string" || !info.appName || typeof info.version !== "string" || !info.version || typeof info.buildNumber !== "string") return {error: "STAGING_INCOMPLETE"};
+  if (typeof electronVersion !== "string" || !/^[0-9]+[.][0-9]+[.][0-9]+$/.test(electronVersion)) return {error: "ELECTRON_VERSION_UNKNOWN"};
+  const copyright = copyrightFor(entity, info.buildNumber);
+  if (copyright === null) return {error: "COPYRIGHT_ENTITY_MISSING"};
+  const options = {
+    dir: join(stagingDir, "app"),
+    out: outDir,
+    name: info.appName,
+    executableName: linuxExecutableName(flavour),
+    appVersion: info.version,
+    buildVersion: info.buildNumber,
+    platform: "linux",
+    arch,
+    electronVersion,
+    overwrite: true,
+    prune: false,
+    derefSymlinks: true,
+    junk: true,
+    quiet: true,
+    asar: ASAR_UNPACK,
+    extraResource: [join(stagingDir, "electron", "LICENSE"), join(stagingDir, "electron", "LICENSES.chromium.html")],
+    appCopyright: copyright
+  };
+  if (electronZipDir) options.electronZipDir = electronZipDir;
+  return {options};
+}
+
+/**
+ * Checks a built Linux app folder: the executable and the helper side by side and executable, the
+ * models in `tessdata/` beside them (exactly the staged ones, by hash; `modelHashes` maps each file to
+ * the hash read from the folder, or null), no link, no map, and no setuid or setgid file anywhere:
+ * Electron's sandbox runs on user namespaces (Ubuntu grants them through the package's AppArmor
+ * profile), never through a root-owned `chrome-sandbox`. The asar rules are the others', plus the
+ * GNOME extension.
+ */
+export function checkLinuxBundle({listing, asarFiles, unpacked, options, models, modelHashes, rootMode}) {
   const problems = [];
-  const roots = unpackedRootsFor(platform);
-  for (const rel of ASAR_REQUIRED) if (!asarFiles.includes(rel)) problems.push({code: "ASAR_FILE_MISSING", detail: rel});
+  // Installed by root under /opt, everything must still be readable (and the programs and folders
+  // enterable) by every user: packager leaves its output folder 0700.
+  if (((rootMode ?? 0) & 0o005) !== 0o005) problems.push({code: "NOT_READABLE_BY_USERS", detail: "."});
+  for (const e of listing) {
+    if (e.kind === "symlink") continue;
+    const needs = e.kind === "dir" || ((e.mode ?? 0) & 0o100) !== 0 ? 0o005 : 0o004;
+    if (((e.mode ?? 0) & needs) !== needs) problems.push({code: "NOT_READABLE_BY_USERS", detail: e.rel});
+  }
+  const entry = (rel) => listing.find((e) => e.rel === rel && e.kind === "file");
+  const executable = (rel) => { const e = entry(rel); return e !== undefined && (e.mode & 0o111) !== 0; };
+  if (!entry("clave-reader")) problems.push({code: "HELPER_MISSING", detail: "clave-reader"});
+  else if (!executable("clave-reader")) problems.push({code: "HELPER_NOT_EXECUTABLE", detail: "clave-reader"});
+  if (!executable(options.executableName)) problems.push({code: "EXECUTABLE_MISSING", detail: options.executableName});
+  for (const rel of ["resources/app.asar", "resources/LICENSE", "resources/LICENSES.chromium.html"]) {
+    if (!entry(rel)) problems.push({code: "BUNDLE_FILE_MISSING", detail: rel});
+  }
+  if (listing.some((e) => e.rel === "resources/app" && e.kind === "dir")) problems.push({code: "UNPACKED_APP_FOLDER", detail: "resources/app"});
+  for (const e of listing) {
+    if (e.kind === "symlink") problems.push({code: "SYMLINK_IN_BUNDLE", detail: e.rel});
+    if (e.kind === "file" && e.rel.endsWith(".map")) problems.push({code: "FORBIDDEN_FILE", detail: e.rel});
+    if ((e.mode ?? 0) & 0o6000) problems.push({code: "SETUID_FILE", detail: e.rel});
+  }
+  if (!Array.isArray(models) || models.length === 0) problems.push({code: "MODELS_UNLISTED", detail: "tessdata"});
+  else {
+    for (const m of models) if (!entry(`tessdata/${m.file}`)) problems.push({code: "MODEL_MISSING", detail: m.file});
+    const found = models.filter((m) => entry(`tessdata/${m.file}`)).map((m) => ({file: m.file, sha256: modelHashes?.[m.file] ?? "unreadable"}));
+    for (const m of found) if (m.sha256 !== models.find((x) => x.file === m.file).sha256) problems.push({code: "MODEL_HASH_WRONG", detail: m.file});
+    for (const e of listing) if (e.rel.startsWith("tessdata/") && !models.some((m) => `tessdata/${m.file}` === e.rel)) problems.push({code: "MODEL_UNEXPECTED", detail: e.rel});
+  }
+  problems.push(...checkAsar({asarFiles, unpacked, platform: "linux", arch: options.arch}));
+  return problems;
+}
+
+/** The asar and unpacked-folder rules every system shares (Linux adds the extension to what is required). */
+function checkAsar({asarFiles, unpacked, platform, arch}) {
+  const problems = [];
+  const roots = unpackedRootsFor(platform, arch);
+  for (const rel of platform === "linux" ? LINUX_ASAR_REQUIRED : ASAR_REQUIRED) if (!asarFiles.includes(rel)) problems.push({code: "ASAR_FILE_MISSING", detail: rel});
   for (const rel of asarFiles) {
     if (ASAR_FORBIDDEN.includes(rel) || rel.startsWith("/dist/native/") || rel.endsWith(".map")) problems.push({code: "ASAR_FORBIDDEN_FILE", detail: rel});
   }
@@ -282,10 +397,15 @@ export function checkBundle({listing, plist, asarFiles, unpacked, options}) {
 // ---------------------------------------------------------------------------------------------
 // The impure half. Nothing below runs at import.
 
-/** Where @electron/get keeps its zips: `~/Library/Caches/electron` on macOS, `%LOCALAPPDATA%\electron\Cache` on Windows. */
-const cacheFor = (platform, env) => (platform === "win32"
-  ? join(env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "electron", "Cache")
-  : join(homedir(), "Library", "Caches", "electron"));
+/**
+ * Where @electron/get keeps its zips: `~/Library/Caches/electron` on macOS, `%LOCALAPPDATA%\electron\Cache`
+ * on Windows, `$XDG_CACHE_HOME/electron` (else `~/.cache/electron`) on Linux.
+ */
+export function cacheFor(platform, env, home = homedir()) {
+  if (platform === "win32") return join(env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "electron", "Cache");
+  if (platform === "linux") return join(env.XDG_CACHE_HOME || join(home, ".cache"), "electron");
+  return join(home, "Library", "Caches", "electron");
+}
 
 function zipCandidates(cacheDir) {
   if (!existsSync(cacheDir)) return [];
@@ -298,7 +418,7 @@ function zipCandidates(cacheDir) {
 }
 
 function listingOf(appPath) {
-  return walk(appPath).map((e) => ({...e, mode: e.kind === "file" ? statSync(join(appPath, e.rel)).mode : 0}));
+  return walk(appPath).map((e) => ({...e, mode: e.kind === "symlink" ? 0 : statSync(join(appPath, e.rel)).mode}));
 }
 
 export function plistAsObject(plistPath) {
@@ -341,7 +461,7 @@ export function runningProbe(dir, platform) {
   catch (error) { return {...probe, status: Number.isInteger(error?.status) ? error.status : null, output: String(error?.stdout ?? "")}; }
 }
 
-export async function bundle({appDir, argv, env, home, log, err, platform: host = process.platform}) {
+export async function bundle({appDir, argv, env, home, log, err, platform: host = process.platform, arch: hostArch = process.arch}) {
   const fail = (code, detail) => { err(`BUNDLE_FAILED ${code}${detail ? ` ${detail}` : ""}`); return 1; };
   const out = resolveOut(argv, home, appDir);
   if (out.error) return fail(out.error);
@@ -367,30 +487,37 @@ export async function bundle({appDir, argv, env, home, log, err, platform: host 
   if (!Object.hasOwn(ELECTRON_TARGETS, platform)) return fail("UNSUPPORTED_PLATFORM", platform);
   if (platform !== host) return fail("STAGING_FOR_ANOTHER_SYSTEM", `staged for ${platform}, running on ${host}`);
   const windows = platform === "win32";
+  const linux = platform === "linux";
+  // Linux: a staging also names its architecture, and it too must be this machine's (every build is native).
+  if (linux && info.arch !== hostArch) return fail("STAGING_FOR_ANOTHER_SYSTEM", `staged for linux-${info.arch}, running on linux-${hostArch}`);
   const helperName = info.helper?.name ?? "clave-reader";
-  for (const rel of ["app/package.json", "app/dist/main.cjs", `helper/${helperName}`, "electron/LICENSE", "electron/LICENSES.chromium.html"]) {
+  const models = linux ? info.models : [];
+  if (linux && (!Array.isArray(models) || models.length === 0 || checkModels(models) !== null)) return fail("STAGING_INCOMPLETE", "models");
+  for (const rel of ["app/package.json", "app/dist/main.cjs", `helper/${helperName}`, "electron/LICENSE", "electron/LICENSES.chromium.html", ...models.map((m) => `tessdata/${m.file}`)]) {
     if (!existsSync(join(stagingDir, rel))) return fail("STAGING_INCOMPLETE", rel);
   }
 
   const electronVersion = JSON.parse(readFileSync(join(appDir, "node_modules", "electron", "package.json"), "utf8")).version;
-  const target = ELECTRON_TARGETS[platform];
-  const zip = findElectronZip(zipCandidates(env.CLAVE_ELECTRON_CACHE ?? cacheFor(platform, env)), electronVersion, platform);
+  const target = electronTargetFor(platform, info.arch);
+  if (target === null) return fail("UNSUPPORTED_PLATFORM", `${platform}-${info.arch}`);
+  const zip = findElectronZip(zipCandidates(env.CLAVE_ELECTRON_CACHE ?? cacheFor(platform, env, home)), electronVersion, platform, info.arch);
   const allowDownload = argv.includes("--allow-download");
   if (zip === null && !allowDownload) return fail("ELECTRON_ZIP_MISSING", `electron-v${electronVersion}-${target.platform}-${target.arch}.zip; pass --allow-download to fetch it`);
 
   const iconPath = join(appDir, "build", windows ? "icon.ico" : "icon.icns");
   const bundleOut = join(out.dir, flavour, "bundle");
-  const decided = (windows ? winPackagerOptions : packagerOptions)({
+  const decided = (windows ? winPackagerOptions : linux ? linuxPackagerOptions : packagerOptions)({
     flavour, info, stagingDir, outDir: bundleOut, electronVersion,
     electronZipDir: zip ? dirname(zip) : undefined,
-    iconPath: existsSync(iconPath) ? iconPath : undefined,
-    entity: env.CLAVE_COPYRIGHT_ENTITY ?? "Clave"
+    iconPath: !linux && existsSync(iconPath) ? iconPath : undefined,
+    entity: env.CLAVE_COPYRIGHT_ENTITY ?? "Clave",
+    arch: info.arch
   });
   if (decided.error) return fail(decided.error);
   const options = decided.options;
   const folder = join(bundleOut, `${info.appName}-${target.platform}-${target.arch}`);
-  // What the later steps sign and package: the .app on macOS, the app folder on Windows.
-  const appPath = windows ? folder : join(folder, `${info.appName}.app`);
+  // What the later steps sign and package: the .app on macOS, the app folder on Windows and Linux.
+  const appPath = windows || linux ? folder : join(folder, `${info.appName}.app`);
 
   // Never delete a folder something is running from (the lesson of 2026-09-19): the WHOLE bundle
   // folder is removed below, so the whole folder is what is probed, whatever is inside it.
@@ -402,7 +529,7 @@ export async function bundle({appDir, argv, env, home, log, err, platform: host 
   rmSync(bundleOut, {recursive: true, force: true});
 
   const {packager} = await import("@electron/packager");
-  const hooks = windows ? {} : {
+  const hooks = windows || linux ? {} : {
     // The template plist is read by packager AFTER this hook, so a key removed here stays removed.
     afterExtract: [async ({buildPath}) => {
       const plist = join(buildPath, "Electron.app", "Contents", "Info.plist");
@@ -417,22 +544,38 @@ export async function bundle({appDir, argv, env, home, log, err, platform: host 
   if (!Array.isArray(produced) || produced.length !== 1) return fail("PACKAGER_FAILED", `outputs ${Array.isArray(produced) ? produced.length : "?"}`);
   if (!existsSync(appPath)) return fail("PACKAGER_FAILED", `expected ${basename(appPath)}`);
 
-  // The helper beside the app's own executable: where app.ts looks for it first.
+  // The helper beside the app's own executable: where app.ts looks for it first. On Linux the models
+  // go beside it too, in `tessdata/`, where the app points the reader (`platform.ts`, readerSpawnEnv).
   if (windows) cpSync(join(stagingDir, "helper", helperName), join(appPath, helperName));
-  else {
+  else if (linux) {
+    // packager's output folder is 0700 (a temporary folder renamed into place); root installs it under
+    // /opt for every user, so it is opened to 0755 here, and the check below holds every entry to that.
+    chmodSync(appPath, 0o755);
+    cpSync(join(stagingDir, "helper", helperName), join(appPath, helperName));
+    chmodSync(join(appPath, helperName), 0o755);
+    mkdirSync(join(appPath, "tessdata"), {recursive: true});
+    for (const m of models) {
+      cpSync(join(stagingDir, "tessdata", m.file), join(appPath, "tessdata", m.file));
+      chmodSync(join(appPath, "tessdata", m.file), 0o644);
+    }
+  } else {
     cpSync(join(stagingDir, "helper", helperName), join(appPath, "Contents", "MacOS", helperName));
     chmodSync(join(appPath, "Contents", "MacOS", helperName), 0o755);
   }
 
   const asar = await loadAsar();
-  const resources = windows ? join(appPath, "resources") : join(appPath, "Contents", "Resources");
+  const resources = windows || linux ? join(appPath, "resources") : join(appPath, "Contents", "Resources");
   const asarPath = join(resources, "app.asar");
   const unpackedPath = join(resources, "app.asar.unpacked");
   // @electron/asar lists with this system's separator; the checks are written with posix ones.
   const asarFiles = asar.listPackage(asarPath, {isPack: false}).map((f) => f.split("\\").join("/"));
   const unpacked = existsSync(unpackedPath) ? walk(unpackedPath) : [];
+  const hashOf = (path) => { try { return createHash("sha256").update(readFileSync(path)).digest("hex"); } catch { return null; } };
   const problems = windows
     ? checkWinBundle({listing: listingOf(appPath), versionInfo: await versionInfoOf(join(appPath, `${options.executableName}.exe`)), asarFiles, unpacked, options})
+    : linux
+    ? checkLinuxBundle({listing: listingOf(appPath), asarFiles, unpacked, options, models, rootMode: statSync(appPath).mode,
+      modelHashes: Object.fromEntries(models.map((m) => [m.file, hashOf(join(appPath, "tessdata", m.file))]))})
     : checkBundle({listing: listingOf(appPath), plist: plistAsObject(join(appPath, "Contents", "Info.plist")), asarFiles, unpacked, options});
   if (problems.length > 0) return fail("BUNDLE_CHECK_FAILED", `${problems[0].code} ${problems[0].detail} (+${problems.length - 1})`);
 
@@ -441,6 +584,7 @@ export async function bundle({appDir, argv, env, home, log, err, platform: host 
     flavour, platform, appName: info.appName, version: info.version, buildNumber: info.buildNumber, electronVersion,
     bundleId: bundleIdFor(flavour), appPath: appPath.slice(out.dir.length + 1),
     ...(windows ? {executable: `${options.executableName}.exe`, helper: helperName} : {}),
+    ...(linux ? {arch: info.arch, executable: options.executableName, helper: helperName, models} : {}),
     bytes: {app: bytes(appPath), asar: statSync(asarPath).size, unpacked: existsSync(unpackedPath) ? bytes(unpackedPath) : 0},
     fused: false, signed: false, notarized: false
   };

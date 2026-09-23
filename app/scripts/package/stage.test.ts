@@ -7,13 +7,19 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as stageScript from "./stage.mjs";
 
-const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest, resolveOut, requestedFlavour, installedIds, pnpmInvocation, pickRedistDir} = stageScript as {
+const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest, resolveOut, requestedFlavour, installedIds, pnpmInvocation, pickRedistDir, targetFor, TARGETS, TESSDATA_MODELS, checkModels, defaultTools, missingModelBinaries} = stageScript as {
   pickRedistDir: (candidates: string[]) => {path: string; version: string} | null;
-  shipList: (files: string[], flavour: string, platform?: string) => {ship?: string[]; helper?: string; error?: {code: string; path: string}};
-  runtimePackageJson: (a: {flavour: string; version: string; nodeLlamaCppVersion: string}) => Record<string, unknown>;
+  shipList: (files: string[], flavour: string, platform?: string, arch?: string) => {ship?: string[]; helper?: string; error?: {code: string; path: string}};
+  runtimePackageJson: (a: {flavour: string; version: string; nodeLlamaCppVersion: string; platform?: string}) => Record<string, unknown>;
   lockHas: (lock: string, id: string) => boolean;
-  pruneDecision: (rel: string, options?: {dropLlamaSource?: boolean; platform?: string}) => "keep" | "drop";
-  forbidden: (rel: string, platform?: string) => string | null;
+  pruneDecision: (rel: string, options?: {dropLlamaSource?: boolean; platform?: string; arch?: string}) => "keep" | "drop";
+  forbidden: (rel: string, platform?: string, arch?: string) => string | null;
+  targetFor: (platform: string, arch?: string) => {helper: string; rustTarget: string; keep: Record<string, string[]>; binaryHomes: string[]; distExtra?: string[]; models?: unknown} | null;
+  TARGETS: Record<string, unknown>;
+  TESSDATA_MODELS: Array<{file: string; sha256: string}>;
+  checkModels: (found: Array<{file: string; sha256: string | null}>) => {code: string; detail: string} | null;
+  defaultTools: (platform: string, home: string, env: Record<string, string | undefined>) => {pnpm: string; cargo: string};
+  missingModelBinaries: (installed: string[], platform: string, arch?: string) => string[];
   pnpmInvocation: (path: string, o: {nodePath: string; exists: (p: string) => boolean; join?: (...p: string[]) => string; dirname?: (p: string) => string}) => {command: string; args: string[]} | null;
   manifest: (entries: Array<{path: string; bytes: number; sha256: string}>, info: Record<string, string>) => {fileCount: number; totalBytes: number; files: Array<{path: string}>};
   resolveOut: (argv: string[], home: string, appDir: string) => {dir?: string; error?: string};
@@ -199,6 +205,139 @@ describe("Windows: the same rules, for what a win32 staging run ships", () => {
   });
 });
 
+describe("Linux: one target per architecture, the extension in the asar, the models beside the helper", () => {
+  const EXTENSION = ["gnome-extension/extension.js", "gnome-extension/logic.js", "gnome-extension/metadata.json"];
+  const LINUX_COMPLETE = [...COMPLETE, ...EXTENSION];
+
+  it("targetFor needs an architecture on Linux and knows x64 and arm64 only; the other systems ignore it", () => {
+    expect(targetFor("linux")).toBeNull();
+    expect(targetFor("linux", "ia32")).toBeNull();
+    expect(targetFor("linux", "arm")).toBeNull();
+    expect(targetFor("linux", "toString")).toBeNull();
+    expect(targetFor("linux", "x64")?.rustTarget).toBe("x86_64-unknown-linux-gnu");
+    expect(targetFor("linux", "arm64")?.rustTarget).toBe("aarch64-unknown-linux-gnu");
+    for (const arch of ["x64", "arm64"]) expect(targetFor("linux", arch)?.helper, arch).toBe("clave-reader");
+    expect(targetFor("darwin", "x64")).toBe(TARGETS.darwin);
+    expect(targetFor("win32")).toBe(TARGETS.win32);
+    expect(targetFor("freebsd", "x64")).toBeNull();
+  });
+
+  it("ships the GNOME extension's three files into the asar on Linux, requires each, and refuses them on other systems", () => {
+    for (const arch of ["x64", "arm64"]) {
+      const r = shipList(LINUX_COMPLETE, "internal", "linux", arch);
+      expect(r.error, arch).toBeUndefined();
+      expect(r.helper).toBe("native/clave-reader");
+      for (const file of EXTENSION) expect(r.ship, file).toContain(file);
+    }
+    for (const file of EXTENSION) {
+      expect(shipList(LINUX_COMPLETE.filter((f) => f !== file), "release", "linux", "x64").error, file).toEqual({code: "DIST_INCOMPLETE", path: file});
+    }
+    expect(shipList([...LINUX_COMPLETE, "gnome-extension/prefs.js"], "internal", "linux", "x64").error).toEqual({code: "UNEXPECTED_DIST_FILE", path: "gnome-extension/prefs.js"});
+    expect(shipList(LINUX_COMPLETE, "internal").error).toEqual({code: "UNEXPECTED_DIST_FILE", path: "gnome-extension/extension.js"});
+    expect(shipList(LINUX_COMPLETE.map((f) => (f === "native/clave-reader" ? "native/clave-reader.exe" : f)), "internal", "win32").error).toEqual({code: "UNEXPECTED_DIST_FILE", path: "gnome-extension/extension.js"});
+    expect(shipList(LINUX_COMPLETE.map((f) => (f === "native/clave-reader" ? "native/clave-reader.exe" : f)), "internal", "linux", "x64").error).toEqual({code: "UNEXPECTED_DIST_FILE", path: "native/clave-reader.exe"});
+  });
+
+  it("refuses Linux without a known architecture rather than guess one", () => {
+    expect(shipList(LINUX_COMPLETE, "internal", "linux").error).toEqual({code: "UNSUPPORTED_PLATFORM", path: "linux"});
+    expect(shipList(LINUX_COMPLETE, "internal", "linux", "ppc64").error).toEqual({code: "UNSUPPORTED_PLATFORM", path: "linux-ppc64"});
+  });
+
+  it("x64 keeps the CPU and Vulkan builds and reflink's glibc binary; drops CUDA, arm64, musl and every other system's", () => {
+    const x64 = {platform: "linux", arch: "x64"};
+    for (const rel of ["@node-llama-cpp/linux-x64/bins/linux-x64/llama-addon.node", "@node-llama-cpp/linux-x64-vulkan/bins/linux-x64-vulkan/libggml-vulkan.so",
+      "@reflink/reflink-linux-x64-gnu/reflink.linux-x64-gnu.node", "@reflink/reflink/index.js", "@node-llama-cpp", "@reflink"]) {
+      expect(pruneDecision(rel, x64), rel).toBe("keep");
+    }
+    for (const rel of ["@node-llama-cpp/linux-x64-cuda", "@node-llama-cpp/linux-x64-cuda-ext", "@node-llama-cpp/linux-arm64", "@node-llama-cpp/linux-armv7l",
+      "@node-llama-cpp/mac-arm64-metal", "@node-llama-cpp/win-x64", "@reflink/reflink-linux-x64-musl", "@reflink/reflink-linux-arm64-gnu", "@reflink/reflink-darwin-arm64"]) {
+      expect(pruneDecision(rel, x64), rel).toBe("drop");
+    }
+  });
+
+  it("arm64 keeps its one build and reflink's glibc binary, and drops every x64 package", () => {
+    const arm64 = {platform: "linux", arch: "arm64"};
+    for (const rel of ["@node-llama-cpp/linux-arm64/bins/linux-arm64/libllama.v0.4.0.so", "@reflink/reflink-linux-arm64-gnu/reflink.linux-arm64-gnu.node"]) {
+      expect(pruneDecision(rel, arm64), rel).toBe("keep");
+    }
+    for (const rel of ["@node-llama-cpp/linux-x64", "@node-llama-cpp/linux-x64-vulkan", "@reflink/reflink-linux-x64-gnu", "@reflink/reflink-linux-arm64-musl"]) {
+      expect(pruneDecision(rel, arm64), rel).toBe("drop");
+    }
+  });
+
+  it("OTHER_PLATFORM: each architecture refuses the other's packages, and a Linux package is still refused on macOS and Windows", () => {
+    expect(forbidden("node_modules/@node-llama-cpp/linux-arm64/package.json", "linux", "x64")).toBe("OTHER_PLATFORM");
+    expect(forbidden("node_modules/@node-llama-cpp/linux-x64/package.json", "linux", "arm64")).toBe("OTHER_PLATFORM");
+    expect(forbidden("node_modules/@node-llama-cpp/linux-x64-vulkan/package.json", "linux", "arm64")).toBe("OTHER_PLATFORM");
+    expect(forbidden("node_modules/@reflink/reflink-linux-arm64-gnu/package.json", "linux", "x64")).toBe("OTHER_PLATFORM");
+    expect(forbidden("node_modules/a/node_modules/@reflink/reflink-linux-x64-gnu/package.json", "linux", "arm64")).toBe("OTHER_PLATFORM");
+    expect(forbidden("node_modules/@node-llama-cpp/linux-x64-cuda/package.json", "linux", "x64")).toBe("OTHER_PLATFORM");
+    expect(forbidden("node_modules/@node-llama-cpp/linux-arm64/package.json", "win32")).toBe("OTHER_PLATFORM");
+    expect(forbidden("node_modules/@node-llama-cpp/linux-arm64/package.json")).toBe("OTHER_PLATFORM");
+    expect(forbidden("node_modules/@node-llama-cpp/linux-x64/package.json", "linux", "x64")).toBeNull();
+    expect(forbidden("node_modules/@node-llama-cpp/linux-arm64/package.json", "linux", "arm64")).toBeNull();
+  });
+
+  it("allows native binaries in that architecture's homes only", () => {
+    for (const rel of ["node_modules/@node-llama-cpp/linux-x64/bins/linux-x64/libggml-base.so", "node_modules/@node-llama-cpp/linux-x64-vulkan/bins/linux-x64-vulkan/llama-addon.node",
+      "node_modules/@reflink/reflink-linux-x64-gnu/reflink.linux-x64-gnu.node"]) {
+      expect(forbidden(rel, "linux", "x64"), rel).toBeNull();
+    }
+    expect(forbidden("node_modules/@node-llama-cpp/linux-arm64/bins/linux-arm64/libggml-cpu-armv8.2_1.so", "linux", "arm64")).toBeNull();
+    expect(forbidden("node_modules/node-llama-cpp/llama/libggml.so", "linux", "x64")).toBe("BINARY_OUTSIDE_ITS_HOME");
+    expect(forbidden("dist/stray.so", "linux", "arm64")).toBe("BINARY_OUTSIDE_ITS_HOME");
+    expect(forbidden("node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/libggml.dylib", "linux", "arm64")).not.toBeNull();
+    expect(forbidden("dist/native/clave-reader", "linux", "x64")).toBe("HELPER_INSIDE_ASAR");
+    expect(forbidden("dist/gnome-extension/extension.js", "linux", "x64")).toBeNull();
+    // Without an architecture nothing Linux-native is allowed: the macOS homes apply, never a guess.
+    expect(forbidden("node_modules/@node-llama-cpp/linux-x64/bins/linux-x64/libggml-base.so", "linux")).not.toBeNull();
+  });
+
+  it("the models are the reader's: the same two files and SHA-256s recognise.rs pins", () => {
+    const rust = readFileSync(fileURLToPath(new URL("../../native/reader/src/linux/recognise.rs", import.meta.url)), "utf8");
+    const start = rust.indexOf("pub const MODELS");
+    const pinned = [...rust.slice(start, rust.indexOf("];", start)).matchAll(/\("([a-z]+\.traineddata)",\s*"([0-9a-f]{64})"\)/g)].map((m) => ({file: m[1], sha256: m[2]}));
+    expect(pinned).toHaveLength(2);
+    expect(TESSDATA_MODELS).toEqual(pinned);
+    for (const arch of ["x64", "arm64"]) expect(targetFor("linux", arch)?.models, arch).toBe(TESSDATA_MODELS);
+    expect(targetFor("darwin")?.models).toBeUndefined();
+  });
+
+  it("checkModels: both files, each with its pinned hash, or a refusal naming the file", () => {
+    const good = TESSDATA_MODELS.map((m) => ({file: m.file, sha256: m.sha256}));
+    expect(checkModels(good)).toBeNull();
+    expect(checkModels([...good].reverse())).toBeNull();
+    expect(checkModels(good.slice(1))).toEqual({code: "MODEL_MISSING", detail: good[0].file});
+    expect(checkModels([good[0], {file: good[1].file, sha256: null}])).toEqual({code: "MODEL_MISSING", detail: good[1].file});
+    expect(checkModels([good[0], {file: good[1].file, sha256: "0".repeat(64)}])).toEqual({code: "MODEL_HASH_WRONG", detail: good[1].file});
+    expect(checkModels([{file: good[0].file, sha256: good[1].sha256}, good[1]])).toEqual({code: "MODEL_HASH_WRONG", detail: good[0].file});
+  });
+
+  it("the desktop name: the bundle id on Linux (the Wayland app id and the portal's identity), absent elsewhere and for dev", () => {
+    const base = {version: "0.1.0", nodeLlamaCppVersion: "3.21.1"};
+    expect(runtimePackageJson({...base, flavour: "internal", platform: "linux"}).desktopName).toBe("dev.clave.agent.internal.desktop");
+    expect(runtimePackageJson({...base, flavour: "release", platform: "linux"}).desktopName).toBe("dev.clave.agent.desktop");
+    expect(runtimePackageJson({...base, flavour: "dev", platform: "linux"})).not.toHaveProperty("desktopName");
+    for (const platform of ["darwin", "win32", undefined]) expect(runtimePackageJson({...base, flavour: "release", platform}), String(platform)).not.toHaveProperty("desktopName");
+  });
+
+  it("the default tools on Linux: rustup's cargo and pnpm's own install folder", () => {
+    expect(defaultTools("linux", "/home/u", {})).toEqual({pnpm: "/home/u/.local/share/pnpm/pnpm", cargo: "/home/u/.cargo/bin/cargo"});
+    expect(defaultTools("darwin", "/Users/u", {}).cargo).toBe("/opt/homebrew/opt/rustup/bin/cargo");
+  });
+});
+
+describe("missingModelBinaries: the model's own binary packages must be there after the offline install", () => {
+  it("names every kept node-llama-cpp build that did not arrive (an offline resolve can skip them silently)", () => {
+    expect(missingModelBinaries(["node-llama-cpp", "@node-llama-cpp/mac-arm64-metal"], "darwin")).toEqual([]);
+    expect(missingModelBinaries(["node-llama-cpp"], "darwin")).toEqual(["@node-llama-cpp/mac-arm64-metal"]);
+    expect(missingModelBinaries(["@node-llama-cpp/win-x64"], "win32")).toEqual(["@node-llama-cpp/win-x64-vulkan"]);
+    expect(missingModelBinaries([], "linux", "x64")).toEqual(["@node-llama-cpp/linux-x64", "@node-llama-cpp/linux-x64-vulkan"]);
+    expect(missingModelBinaries(["@node-llama-cpp/linux-arm64"], "linux", "arm64")).toEqual([]);
+    expect(missingModelBinaries(["@node-llama-cpp/linux-x64"], "linux", "arm64")).toEqual(["@node-llama-cpp/linux-arm64"]);
+  });
+});
+
 describe("pickRedistDir: which Visual C++ runtime the Windows build copies", () => {
   const crt = (version: string, name = "Microsoft.VC143.CRT") => `C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Redist/MSVC/${version}/x64/${name}`;
 
@@ -331,27 +470,35 @@ describe("a real staging run, when one exists", () => {
   const outDir = join(fileURLToPath(new URL("../..", import.meta.url)), "out");
   const manifests = existsSync(outDir) ? readdirSync(outDir).map((f) => join(outDir, f, "staging", "manifest.json")).filter((p) => existsSync(p)) : [];
   it.each(manifests.length > 0 ? manifests : [])("%s ships nothing forbidden and no map", (path) => {
-    const m = JSON.parse(readFileSync(path, "utf8")) as {files: Array<{path: string; bytes: number; sha256: string}>; flavour: string; platform?: string};
+    const m = JSON.parse(readFileSync(path, "utf8")) as {files: Array<{path: string; bytes: number; sha256: string}>; flavour: string; platform?: string; arch?: string; models?: Array<{file: string; sha256: string}>};
     // A manifest from before Windows carries no platform: it was a macOS run.
     const platform = m.platform ?? "darwin";
     expect(m.files.length).toBeGreaterThan(100);
     for (const f of m.files) {
-      expect(forbidden(f.path, platform), f.path).toBeNull();
+      expect(forbidden(f.path, platform, m.arch), f.path).toBeNull();
       expect(f.sha256).toMatch(/^[0-9a-f]{64}$/);
     }
     const paths = m.files.map((f) => f.path);
     expect(paths).toContain("package.json");
     expect(paths).toContain("dist/main.cjs");
     expect(paths).toContain("dist/THIRD-PARTY-LICENSES.txt");
+    const linuxAddons = m.arch === "x64"
+      ? ["node_modules/@node-llama-cpp/linux-x64/bins/linux-x64/llama-addon.node", "node_modules/@node-llama-cpp/linux-x64-vulkan/bins/linux-x64-vulkan/llama-addon.node"]
+      : ["node_modules/@node-llama-cpp/linux-arm64/bins/linux-arm64/llama-addon.node"];
     const addons = platform === "win32"
       ? ["node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node", "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/llama-addon.node"]
-      : ["node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/llama-addon.node"];
+      : platform === "linux" ? linuxAddons : ["node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/llama-addon.node"];
     for (const addon of addons) expect(paths).toContain(addon);
     // Windows: Microsoft's C++ runtime beside each addon, so the model loads on a PC without it installed.
     if (platform === "win32") {
       for (const dir of ["node_modules/@node-llama-cpp/win-x64/bins/win-x64", "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan"]) {
         for (const dll of ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"]) expect(paths).toContain(`${dir}/${dll}`);
       }
+    }
+    // Linux: the GNOME extension inside the asar, and the two pinned models recorded beside the helper.
+    if (platform === "linux") {
+      for (const file of ["extension.js", "logic.js", "metadata.json"]) expect(paths).toContain(`dist/gnome-extension/${file}`);
+      expect(m.models).toEqual(TESSDATA_MODELS.map((model) => expect.objectContaining(model)));
     }
     if (m.flavour === "release") expect(paths).not.toContain("dist/standins-taxonomy.json");
   });

@@ -10,11 +10,14 @@
 // Pure decisions above the line (tested in artefacts.test.ts); nothing runs at import.
 import {execFileSync, spawnSync} from "node:child_process";
 import {createHash} from "node:crypto";
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync} from "node:fs";
+import {chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync} from "node:fs";
 import {homedir, tmpdir} from "node:os";
 import {basename, dirname, join, posix} from "node:path";
 import {fileURLToPath} from "node:url";
-import {requestedFlavour, resolveOut} from "./stage.mjs";
+import {apparmorProfile, checkPackageListing, dependsFor, desktopEntry, installDir, linuxArtefactDecision, NFPM, nfpmConfig, nfpmVersionOf, parseDebListing, parseNeeded, parseRpmListing, pngSize,
+  postinstScript, prermScript} from "./linux/packages.mjs";
+import {walk} from "./walk.mjs";
+import {BUNDLE_IDS, requestedFlavour, resolveOut} from "./stage.mjs";
 
 /**
  * `Clave-Agent-Internal-0.1.0-20260922.0815-arm64`: the app name without spaces, the version, the build
@@ -323,6 +326,129 @@ async function windowsArtefacts({appDir, out, flavour, report, env, log, fail}) 
   return 0;
 }
 
+/** Where nfpm is: CLAVE_NFPM, else the usual install folders. */
+function findNfpm(env, home) {
+  const candidates = [env.CLAVE_NFPM, join(home, ".local", "bin", "nfpm"), "/usr/local/bin/nfpm", "/usr/bin/nfpm"];
+  return candidates.find((p) => typeof p === "string" && existsSync(p)) ?? null;
+}
+
+/**
+ * The Linux artefacts: a .deb and an .rpm made by nfpm from the fused app folder, each file list read
+ * back and checked where this machine has the tool to read it (dpkg-deb on Ubuntu, rpm where
+ * installed), and a SHA256SUMS beside them: on Linux the published checksums are the integrity check.
+ * Made in a partial folder and renamed into place, as on the other systems.
+ */
+async function linuxArtefacts({appDir, out, flavour, report, env, home, log, fail}) {
+  const decision = linuxArtefactDecision({flavour, report});
+  if (decision.error) return fail(decision.error);
+  const appPath = join(out.dir, report.appPath);
+  if (typeof report.executable !== "string" || !existsSync(join(appPath, report.executable))) return fail("BUNDLE_MISSING", "app");
+  const base = artefactBaseName(report, report.arch);
+  if (base === null) return fail("BUNDLE_MISSING", "report fields");
+  const dir = installDir(report.appName);
+  if (dir === null) return fail("APP_NAME_UNSAFE");
+  const desktopId = BUNDLE_IDS[flavour];
+  const models = Array.isArray(report.models) ? report.models.map((m) => m.file) : [];
+  if (models.length === 0) return fail("BUNDLE_MISSING", "models");
+  const iconPath = join(appDir, "build", "icon-preview.png");
+  const size = existsSync(iconPath) ? pngSize(readFileSync(iconPath)) : null;
+  if (size === null || size.width !== 256 || size.height !== 256) return fail("ICON_MISSING", "app/build/icon-preview.png must be a 256x256 PNG");
+  const nfpm = findNfpm(env, home);
+  if (nfpm === null) return fail("NFPM_MISSING", `install nfpm ${NFPM.version} (checksums in scripts/package/linux/packages.mjs) or set CLAVE_NFPM`);
+  // Depends, from what the app folder's binaries link (every ELF file's NEEDED entries, read with
+  // readelf), minus what the folder ships itself; a library with no known package refuses the build.
+  const readelf = ["/usr/bin/readelf", "/bin/readelf"].find(existsSync);
+  if (!readelf) return fail("READELF_MISSING", "install binutils");
+  const isElf = (path) => { const fd = openSync(path, "r"); try { const b = Buffer.alloc(4); return readSync(fd, b, 0, 4, 0) === 4 && b.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])); } finally { closeSync(fd); } };
+  const files = walk(appPath).filter((e) => e.kind === "file");
+  const needed = [];
+  for (const e of files) {
+    if (!isElf(join(appPath, e.rel))) continue;
+    const r = run(readelf, ["-d", join(appPath, e.rel)]);
+    if (r.status !== 0) return fail("READELF_FAILED", e.rel);
+    needed.push(...parseNeeded(r.stdout));
+  }
+  const depends = dependsFor({needed, bundled: files.map((e) => posix.basename(e.rel))});
+  if (depends.unmapped.length > 0) return fail("SONAME_UNMAPPED", `${depends.unmapped.join(",")}: add it to SONAME_PACKAGES in scripts/package/linux/packages.mjs`);
+
+  const version = run(nfpm, ["--version"]);
+  const found = nfpmVersionOf(`${version.stdout}\n${version.stderr}`);
+  if (found !== NFPM.version) return fail("NFPM_VERSION_WRONG", `found ${found ?? "unknown"}, need ${NFPM.version}`);
+
+  const artefactDir = join(out.dir, flavour, "artefacts");
+  const partial = join(out.dir, flavour, "artefacts.partial");
+  rmSync(partial, {recursive: true, force: true});
+  const inputs = join(partial, "package-inputs");
+  mkdirSync(inputs, {recursive: true});
+  const executablePath = `${dir}/${report.executable}`;
+  const profileFile = join(inputs, desktopId);
+  const desktopFile = join(inputs, `${desktopId}.desktop`);
+  const postinstFile = join(inputs, "postinst");
+  const prermFile = join(inputs, "prerm");
+  try {
+    writeFileSync(profileFile, apparmorProfile({profileName: desktopId, executablePath}), {mode: 0o644});
+    writeFileSync(desktopFile, desktopEntry({appName: report.appName, desktopId, executablePath}), {mode: 0o644});
+    writeFileSync(postinstFile, postinstScript({profilePath: `/etc/apparmor.d/${desktopId}`}), {mode: 0o755});
+    writeFileSync(prermFile, prermScript({profilePath: `/etc/apparmor.d/${desktopId}`}), {mode: 0o755});
+  } catch (error) { return fail(error instanceof Error ? error.message : "PACKAGE_INPUT_UNSAFE"); }
+  for (const file of [postinstFile, prermFile]) chmodSync(file, 0o755);
+  const decided = nfpmConfig({flavour, appName: report.appName, executable: report.executable, arch: report.arch, version: report.version, buildNumber: report.buildNumber,
+    appDir: appPath, desktopFile, iconFile: iconPath, profileFile, postinstFile, prermFile, maintainer: env.CLAVE_COPYRIGHT_ENTITY ?? "Clave", depends: {deb: depends.deb, rpm: depends.rpm}});
+  if (decided.error) return fail(decided.error);
+  const configPath = join(inputs, "nfpm.json");
+  writeFileSync(configPath, JSON.stringify(decided.config, null, 2) + "\n");
+
+  const made = {};
+  for (const kind of ["deb", "rpm"]) {
+    const path = join(partial, `${base}.${kind}`);
+    const r = run(nfpm, ["package", "--config", configPath, "--packager", kind, "--target", path]);
+    if (r.status !== 0 || !existsSync(path)) {
+      writeFileSync(join(partial, `nfpm-${kind}.log`), `${r.stdout}\n${r.stderr}`);
+      return fail("PACKAGE_FAILED", `${kind}; see artefacts.partial/nfpm-${kind}.log`);
+    }
+    made[kind] = path;
+  }
+
+  // The file lists, read back by each format's own tool when this machine has it; a check that could
+  // not run is recorded as not run, never as passed.
+  const checks = {};
+  const listingProblems = (kind, listed) => checkPackageListing({listed, kind, appName: report.appName, executable: report.executable, desktopId, models});
+  if (existsSync("/usr/bin/dpkg-deb")) {
+    const listing = run("/usr/bin/dpkg-deb", ["--contents", made.deb]);
+    const debDepends = run("/usr/bin/dpkg-deb", ["--field", made.deb, "Depends"]).stdout.trim();
+    const info = run("/usr/bin/dpkg-deb", ["--info", made.deb]).stdout;
+    const problems = listing.status === 0 ? listingProblems("deb", parseDebListing(listing.stdout)) : [{code: "PACKAGE_UNREADABLE", detail: "deb"}];
+    if (debDepends !== depends.deb.join(", ")) problems.push({code: "PACKAGE_DEPENDS_WRONG", detail: "deb"});
+    for (const script of ["postinst", "prerm"]) if (!new RegExp(`\\s${script}\\s`).test(info)) problems.push({code: "PACKAGE_SCRIPT_MISSING", detail: script});
+    checks.deb = {checked: true, problems};
+  } else checks.deb = {checked: false};
+  const rpmTool = ["/usr/bin/rpm", "/bin/rpm"].find(existsSync);
+  if (rpmTool) {
+    const listing = run(rpmTool, ["-qlvp", made.rpm]);
+    const scripts = run(rpmTool, ["-qp", "--scripts", made.rpm]).stdout.trim();
+    const problems = listing.status === 0 ? listingProblems("rpm", parseRpmListing(listing.stdout)) : [{code: "PACKAGE_UNREADABLE", detail: "rpm"}];
+    if (scripts) problems.push({code: "PACKAGE_SCRIPT_UNEXPECTED", detail: "rpm"});
+    checks.rpm = {checked: true, problems};
+  } else checks.rpm = {checked: false};
+
+  const entry = (path) => ({file: basename(path), bytes: statSync(path).size, sha256: sha256(path)});
+  const artefactReport = {
+    flavour, platform: "linux", arch: report.arch, appName: report.appName, version: report.version, buildNumber: report.buildNumber,
+    signed: false, integrity: "sha256 checksums", nfpm: NFPM.version, installDir: dir, desktopId, depends: {deb: depends.deb, rpm: depends.rpm},
+    deb: {...entry(made.deb), ...checks.deb}, rpm: {...entry(made.rpm), ...checks.rpm}
+  };
+  writeFileSync(join(partial, "artefacts-report.json"), JSON.stringify(artefactReport, null, 2) + "\n");
+  const problems = [...(checks.deb.problems ?? []), ...(checks.rpm.problems ?? [])];
+  if (problems.length > 0) return fail(problems[0].code, `${problems[0].detail} (+${problems.length - 1})`);
+  writeFileSync(join(partial, "SHA256SUMS"), [artefactReport.deb, artefactReport.rpm].map((e) => `${e.sha256}  ${e.file}`).join("\n") + "\n");
+  rmSync(inputs, {recursive: true, force: true});
+  rmSync(artefactDir, {recursive: true, force: true});
+  renameSync(partial, artefactDir);
+  const checked = (kind) => (checks[kind].checked ? "checked" : "not checked here");
+  log(`ARTEFACTS_OK ${flavour} linux-${report.arch} unsigned deb ${artefactReport.deb.bytes} (${checked("deb")}) rpm ${artefactReport.rpm.bytes} (${checked("rpm")}) at ${artefactDir}`);
+  return 0;
+}
+
 export async function artefacts({appDir, argv, env, home, log, err}) {
   const fail = (code, detail) => { err(`ARTEFACTS_FAILED ${code}${detail ? ` ${detail}` : ""}`); return 1; };
   const out = resolveOut(argv, home, appDir);
@@ -343,6 +469,10 @@ export async function artefacts({appDir, argv, env, home, log, err}) {
   if (report.platform === "win32") {
     if (notarizeArg.profile !== null) return fail("NOTARIZE_IS_MACOS_ONLY");
     return windowsArtefacts({appDir, out, flavour, report, env, log, fail});
+  }
+  if (report.platform === "linux") {
+    if (notarizeArg.profile !== null) return fail("NOTARIZE_IS_MACOS_ONLY");
+    return linuxArtefacts({appDir, out, flavour, report, env, home, log, fail});
   }
   const decision = notarizeDecision({flavour, report, profile: notarizeArg.profile});
   if (decision.error) return fail(decision.error);

@@ -13,8 +13,9 @@ import {fileURLToPath} from "node:url";
 const windows = process.platform === "win32";
 const app = join(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = join(app, "native/reader/Cargo.toml");
-// rustup's own default on Windows is %USERPROFILE%\.cargo\bin; on macOS the toolchain is Homebrew's.
-const cargo = process.env.CLAVE_CARGO ?? (windows ? join(homedir(), ".cargo", "bin", "cargo.exe") : "/opt/homebrew/opt/rustup/bin/cargo");
+// rustup's own default on Windows and Linux is ~/.cargo/bin; on macOS the toolchain is Homebrew's.
+const cargo = process.env.CLAVE_CARGO ?? (windows ? join(homedir(), ".cargo", "bin", "cargo.exe")
+  : process.platform === "linux" ? join(homedir(), ".cargo", "bin", "cargo") : "/opt/homebrew/opt/rustup/bin/cargo");
 const helperName = windows ? "clave-reader.exe" : "clave-reader";
 const testing = process.argv.includes("--test");
 

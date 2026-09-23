@@ -65,14 +65,21 @@ fn with_engine<T>(work: impl FnOnce(&mut Engine) -> Result<T, ()>) -> Result<T, 
     if slot.is_none() {
         let exe = std::env::current_exe().ok();
         let variable = std::env::var("CLAVE_TESSDATA").ok();
-        let engine = models_dir(variable.as_deref(), exe.as_deref())
-            .filter(|dir| models_verified(dir, &MODELS))
-            .and_then(|dir| Engine::new(&dir, LANGUAGES))
-            .ok_or(());
-        if engine.is_err() {
-            // Once: the failure is remembered, so every read after this answers `recogniseError`.
-            crate::runtime::note("E_MODELS");
-        }
+        let engine = if !super::tesseract::available() {
+            // No Tesseract library under any known name (the package's dependency is missing).
+            crate::runtime::note("E_TESSERACT");
+            Err(())
+        } else {
+            let engine = models_dir(variable.as_deref(), exe.as_deref())
+                .filter(|dir| models_verified(dir, &MODELS))
+                .and_then(|dir| Engine::new(&dir, LANGUAGES))
+                .ok_or(());
+            if engine.is_err() {
+                // Once: the failure is remembered, so every read after this answers `recogniseError`.
+                crate::runtime::note("E_MODELS");
+            }
+            engine
+        };
         *slot = Some(engine);
     }
     match slot.as_mut() {

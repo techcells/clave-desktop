@@ -229,6 +229,21 @@ describe("a real artefacts run, when one exists", () => {
       expect(w.appUserModelId).toBe(w.flavour === "internal" ? "dev.clave.agent.internal" : "dev.clave.agent");
       return;
     }
+    if (any.platform === "linux") {
+      // Linux: the .deb and the .rpm, never signed, their checksums beside them in SHA256SUMS, and every
+      // file-list check that ran on the build machine passed (one that could not run says so).
+      type Pkg = {file: string; sha256: string; checked: boolean; problems?: unknown[]};
+      const l = any as {arch: string; deb: Pkg; rpm: Pkg; signed: boolean; installDir: string; desktopId: string; appName: string; flavour: string};
+      for (const f of [l.deb, l.rpm]) hashed(f);
+      expect(l.deb.file.endsWith(`-${l.arch}.deb`)).toBe(true);
+      expect(l.rpm.file.endsWith(`-${l.arch}.rpm`)).toBe(true);
+      expect(l.signed).toBe(false);
+      expect(l.installDir).toBe(`/opt/${l.appName}`);
+      expect(l.desktopId).toBe(l.flavour === "internal" ? "dev.clave.agent.internal" : "dev.clave.agent");
+      for (const p of [l.deb, l.rpm]) if (p.checked) expect(p.problems).toEqual([]);
+      expect(readFileSync(join(dir, "SHA256SUMS"), "utf8")).toBe(`${l.deb.sha256}  ${l.deb.file}\n${l.rpm.sha256}  ${l.rpm.file}\n`);
+      return;
+    }
     const r = any as {dmg: {file: string; sha256: string}; zip: {file: string; sha256: string}; checks: Array<{name: string; status: number; mustPass: boolean}>; notarized: boolean; signatures: {app: {authorities: string[]}; helper: {authorities: string[]}; dmg: {authorities: string[]}}};
     expect(r.signatures.app.authorities.length).toBeGreaterThan(0);
     expect(r.signatures.helper.authorities).toEqual(r.signatures.app.authorities);
