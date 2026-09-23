@@ -28,13 +28,18 @@ The app works with Wi-Fi off; only the statements you approve ever leave.
 
 - macOS 14 or later, with Screen Recording permission, asked for on first run
 - Or Windows 10 version 1903 or later (Windows 11 recommended), which needs no permission. Windows
-  runs from a checkout for now; there is no Windows installer yet. Linux is planned.
+  runs from a checkout for now; there is no Windows installer yet.
+- Or Linux with GNOME 46, on Wayland or Xorg (tested on Ubuntu 24.04). The app installs a small GNOME
+  extension for your account (it takes effect after you log out and back in), and GNOME asks once
+  which screen to share. Other desktops (KDE and others) are not supported yet.
 - About 3 GB of disk for the model, downloaded once during set-up
 - For development: Node.js, pnpm, and a Rust toolchain for the native reader; on Windows, also the
-  Visual Studio Build Tools with the C++ workload and a Windows SDK
+  Visual Studio Build Tools with the C++ workload and a Windows SDK; on Linux, also clang, pkg-config,
+  the PipeWire development files and Tesseract 5
 
 The reader uses each system's own parts: ScreenCaptureKit and Vision on macOS, Windows.Graphics.Capture
-and Windows.Media.Ocr on Windows. On Windows the recogniser reads the languages whose Windows language
+and Windows.Media.Ocr on Windows, and on Linux GNOME's screen sharing (through PipeWire) with Tesseract,
+reading English and Portuguese. On Windows the recogniser reads the languages whose Windows language
 pack is installed, English first.
 
 ## Running it
@@ -72,8 +77,8 @@ pnpm --dir app smoke             # end-to-end smoke run, prints SMOKE OK
 
 ## Status
 
-Early, pre-release. The core pipeline, desktop shell and macOS reader are built and tested; the
-connection to the Clave backend is in progress.
+Early, pre-release. The core pipeline, desktop shell and the macOS, Windows and Linux readers are
+built and tested; the connection to the Clave backend is in progress.
 
 ## License
 
