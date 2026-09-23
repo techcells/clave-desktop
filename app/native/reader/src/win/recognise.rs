@@ -5,7 +5,7 @@
 //! English pack, and failing that the user's own profile languages, which is what Windows itself
 //! would use. Latin-script packs read each other's text well; accents are the known weak spot.
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 
 use ::windows::Globalization::Language;
 use ::windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
@@ -19,10 +19,12 @@ use crate::text::Line;
 /// Tried in this order before falling back to the user's profile languages.
 const PREFERRED: [&str; 2] = ["en-US", "pt-BR"];
 
-thread_local! {
-    /// One engine per recognising thread. `OcrEngine` is agile, but creating one loads its model.
-    static ENGINE: RefCell<Option<OcrEngine>> = const { RefCell::new(None) };
-}
+/// One engine for the whole helper. Creating one loads its language model, and that is the cost the
+/// start-up warm-up pays on the main thread before `ready`; the worker thread then reads with this
+/// same engine. `OcrEngine` is agile, so any thread may use it, and the lock keeps one recognition at a
+/// time, which the worker's own queue does anyway. An engine that could not be created is not
+/// remembered as `None` for good: the next recognition tries again.
+static ENGINE: Mutex<Option<OcrEngine>> = Mutex::new(None);
 
 fn create_engine() -> Option<OcrEngine> {
     let available = |tag: &str| {
@@ -93,14 +95,16 @@ pub fn recognise_grey(grey: &[u8], width: usize, height: usize) -> Result<Vec<Li
     let buffer = CryptographicBuffer::CreateFromByteArray(&grey[..width * height]).map_err(|_| ())?;
     let bitmap = SoftwareBitmap::CreateCopyFromBuffer(&buffer, BitmapPixelFormat::Gray8, width as i32, height as i32)
         .map_err(|_| ())?;
-    let result = ENGINE.with(|cell| {
-        let mut slot = cell.borrow_mut();
+    let result = {
+        // A panic while the lock was held leaves no half-made engine behind, so a poisoned lock is
+        // simply taken back.
+        let mut slot = ENGINE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if slot.is_none() {
             *slot = create_engine();
         }
         let engine = slot.as_ref().ok_or(())?;
-        engine.RecognizeAsync(&bitmap).map_err(|_| ())?.join().map_err(|_| ())
-    })?;
+        engine.RecognizeAsync(&bitmap).map_err(|_| ())?.join().map_err(|_| ())?
+    };
     let _ = bitmap.Close();
 
     let (w, h) = (width as f64, height as f64);

@@ -222,9 +222,12 @@ async function start(): Promise<void> {
     ? createGoogleSignIn({baseUrl: apiUrl.url, listen: createLoopbackListener, openExternal: (url) => shell.openExternal(url), randomState: () => randomBytes(32).toString("base64url"), timeoutMs: OAUTH_TIMEOUT_MS})
     : undefined;
   // The helper is a plain child of this process, inside the same bundle: that is what lets the Screen
-  // Recording grant given to the app reach it (phase 0, P1).
+  // Recording grant given to the app reach it (phase 0, P1). On Windows it is a console program, so
+  // Windows gives it a console of its own. On Windows 11 that console was measured to have no window
+  // at all (2026-09-23), but Node documents that one may be shown without `windowsHide`, and nothing
+  // guarantees the same on Windows 10 or with another default terminal, so it is asked for explicitly.
   const real = REAL_READER
-    ? createRealReader({helperPath: chooseHelperPath([join(dirname(process.execPath), HELPER_NAME), here(`native/${HELPER_NAME}`)], existsSync), exists: existsSync, spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"]}), now: () => Date.now()})
+    ? createRealReader({helperPath: chooseHelperPath([join(dirname(process.execPath), HELPER_NAME), here(`native/${HELPER_NAME}`)], existsSync), exists: existsSync, spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true}), now: () => Date.now()})
     : null;
   const reader: Reader = real ? real.reader : standInReader();
   // Running from macOS's quarantine copy: a grant given here would belong to a path nobody can find
