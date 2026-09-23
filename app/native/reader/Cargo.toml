@@ -62,6 +62,13 @@ features = [
     "Win32_UI_WindowsAndMessaging",
 ]
 
+# Linux reads the focused window through a GNOME Shell extension and the ScreenCast portal (both over
+# the session bus) and receives the frames from PipeWire. Tesseract is called through a small
+# hand-written FFI in `src/linux`, so it needs no crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = "0.10.1"
+zbus = "5.19.0"
+
 [profile.release]
 opt-level = 3
 # `panic = "abort"` is deliberately NOT set: the helper turns a panic in any thread into

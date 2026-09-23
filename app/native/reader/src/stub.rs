@@ -1,6 +1,6 @@
-//! The platform for every target that is not macOS.
+//! The platform for every target that is not macOS, Windows or Linux.
 //!
-//! It exists so the crate builds and its tests run on any machine — a Linux CI box, a reviewer's
+//! It exists so the crate builds and its tests run on any machine — a BSD box, a reviewer's odd
 //! laptop — rather than only where the frameworks are. It reports no grant, which makes every
 //! question answer honestly: `permission` is `denied`, `frontWindow` is `null`, and a read is
 //! `failed`. Nothing here pretends to read a screen.

@@ -9,7 +9,7 @@ const say = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 // A blocking write straight to fd 2, as a native helper would do it: if the parent does not drain
 // stderr, this never returns and `ready` is never sent.
 if (mode === "noisy") writeSync(2, "STDERR-NOISE-MUST-BE-IGNORED\n".repeat(20000));
-say({event: "ready", protocol: 2});
+say({event: "ready", protocol: 3});
 
 // The one window this stand-in ever has in front. Protocol 2: a read says which window main
 // approved, and anything else is refused without a capture — so this fake refuses too, which is how

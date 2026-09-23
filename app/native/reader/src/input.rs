@@ -85,6 +85,8 @@ fn handle<P: Platform>(platform: &P, jobs: &Jobs, refused: &AtomicBool, line: &s
         Request::Read { id, budget_ms, expect, lines } => jobs.submit(id, budget_ms, expect, lines),
         Request::Cancel { target } => jobs.cancel(target),
         Request::Shutdown => std::process::exit(0),
+        Request::Grant { token } => platform.grant(&token),
+        Request::Release => platform.release(),
     }
 }
 

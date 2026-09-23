@@ -127,6 +127,7 @@ export function createEvalHelper(deps: EvalHelperDeps): EvalHelper {
     const message = parseLine(line);
     if (message === null) return;                                  // not ours to interpret; the helper is a process
     if (message.kind === "focus") return;                          // the harness stages its own windows; focus is noise
+    if (message.kind === "grant") return;                          // the harness keeps no screen-share grant (Linux)
     if (message.kind === "ready") {
       const settle = readyResolve;
       readyResolve = null;

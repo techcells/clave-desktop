@@ -1,5 +1,5 @@
 import type {FrontWindow} from "../../core/types";
-import {HELPER_MAX_LINE_CHARS} from "./constants";
+import {GRANT_TOKEN_MAX_CHARS, HELPER_MAX_LINE_CHARS} from "./constants";
 
 /** One JSON object per line, in both directions. */
 export type ToHelper =
@@ -7,11 +7,23 @@ export type ToHelper =
   /** `expect` is the window main approved, and the only one the helper may capture (protocol 2). */
   | {id: number; op: "read"; budgetMs: number; expect: FrontWindow}
   | {op: "cancel"; target: number}
-  | {op: "shutdown"};
+  | {op: "shutdown"}
+  /** Protocol 3: the screen-share grant main keeps for the helper (Linux: the portal's restore token). */
+  | {op: "grant"; token: string}
+  /**
+   * Protocol 3: capture was switched off; the helper gives up whatever keeps the screen shared and
+   * opens nothing quietly until the next `grant`, so main sends `grant` again when capture is on.
+   */
+  | {op: "release"};
 
 export type FromHelper =
   | {kind: "ready"; protocol: number}
   | {kind: "focus"}
+  /**
+   * Protocol 3: a fresh screen-share grant for main to keep; the one it held is spent. `null` when the
+   * helper sent a token main would not accept: ignored, never a failure of the calls in flight.
+   */
+  | {kind: "grant"; token: string | null}
   /** `body` is everything the helper sent except `id`. It is NOT validated here: the caller knows which call it answers. */
   | {kind: "answer"; id: number; body: Record<string, unknown>};
 
@@ -75,12 +87,23 @@ export function parseLine(line: string): FromHelper | null {
   const record = value as Record<string, unknown>;
   if ("event" in record) {
     if (record.event === "focus") return {kind: "focus"};
+    if (record.event === "grant") return {kind: "grant", token: isPlausibleGrantToken(record.token) ? record.token : null};
     if (record.event === "ready" && Number.isSafeInteger(record.protocol)) return {kind: "ready", protocol: record.protocol as number};
     return null;
   }
   if (!Number.isSafeInteger(record.id) || (record.id as number) < 0) return null;
   const {id, ...body} = record;
   return {kind: "answer", id: id as number, body};
+}
+
+const GRANT_TOKEN = new RegExp(`^[A-Za-z0-9_-]{1,${GRANT_TOKEN_MAX_CHARS}}$`);
+
+/**
+ * The same rule the Linux helper keeps (`token_is_plausible` in `native/reader/src/linux/session.rs`):
+ * letters, digits, '-' and '_', 1 to 128 characters. The portal's tokens are UUIDs.
+ */
+export function isPlausibleGrantToken(token: unknown): token is string {
+  return typeof token === "string" && GRANT_TOKEN.test(token);
 }
 
 export function parseHelperPermission(body: Record<string, unknown>): HelperPermission | null {

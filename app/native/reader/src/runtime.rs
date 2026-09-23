@@ -34,6 +34,13 @@ pub fn emit(line: &str) {
     }
 }
 
+/// Print a fixed code on stderr and carry on: for a condition worth recording that is not fatal,
+/// such as a session bus that cannot be reached yet. Same rule as [`die`]: a code, nothing else.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn note(code: &str) {
+    let _ = writeln!(std::io::stderr(), "{code}");
+}
+
 /// Print a fixed code on stderr and leave.
 pub fn die(code: &str, status: i32) -> ! {
     // Ignore the result: if stderr is gone too there is nothing else to try.

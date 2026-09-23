@@ -7,7 +7,7 @@ import {
   HELPER_EXIT_WINDOW_MS, HELPER_HEALTHY_AFTER_MS, HELPER_PLANNED_RESTART_MS, HELPER_PLANNED_RESTART_READS,
   HELPER_SHUTDOWN_GRACE_MS, HELPER_START_DEADLINE_MS, READER_PROTOCOL
 } from "./constants";
-import {encode, parseHelperPermission, parseLine, type HelperLink, type ToHelper} from "./protocol";
+import {encode, isPlausibleGrantToken, parseHelperPermission, parseLine, type HelperLink, type ToHelper} from "./protocol";
 
 /** Codes only. Nothing the helper read from a screen can travel through here. */
 export type ReaderClientEvent =
@@ -17,6 +17,14 @@ export type ReaderClientState = "idle" | "starting" | "ready" | "waiting" | "gav
 
 export interface ReaderClient extends Reader {
   state(): ReaderClientState;
+  /**
+   * Protocol 3. The screen-share grant main keeps (Linux: the ScreenCast portal's restore token).
+   * Remembered, and handed to every helper once it is ready, including one started after a crash.
+   * An implausible token is ignored. Other platforms' helpers ignore it.
+   */
+  grant(token: string): void;
+  /** Protocol 3. Capture was switched off: the ready helper gives up whatever keeps the screen shared. */
+  release(): void;
 }
 
 /** `frontWindow()` rejects with this when there is no helper to ask. See `frontWindow` below for why it must reject. */
@@ -49,7 +57,13 @@ interface Helper {
  * is trusted with nothing: every line it sends is parsed here and then checked again by the port's
  * own parsers. Text and titles are only ever handed to the caller; this file logs nothing.
  */
-export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onEvent?: (event: ReaderClientEvent) => void}): ReaderClient {
+export function createReaderClient(deps: {
+  spawn: () => HelperLink;
+  now: Now;
+  onEvent?: (event: ReaderClientEvent) => void;
+  /** Protocol 3: a helper's fresh screen-share grant, for main to keep in place of the spent one. */
+  onGrant?: (token: string) => void;
+}): ReaderClient {
   let current: Helper | null = null;
   /** A planned restart in progress: the next helper, warming up while `current` still serves. */
   let replacement: Helper | null = null;
@@ -86,6 +100,9 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
   function emit(event: ReaderClientEvent): void {
     try { deps.onEvent?.(event); } catch { /* an observer must never break the reader */ }
   }
+
+  /** The newest grant: main's, or a helper's fresher one. Every helper gets it once it is ready. */
+  let grantToken: string | null = null;
 
   function send(helper: Helper, message: ToHelper): void {
     try { helper.link.send(encode(message)); } catch { /* a dead pipe shows up as an exit */ }
@@ -214,6 +231,18 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
     // Unreadable: whatever was asked has failed — and a helper on its way out has nothing left to wait for.
     if (!message) { settleAll(helper, "down"); leaveIfDrained(helper); tryPromote(); return; }
     if (message.kind === "focus") { if (helper === current && helper.ready) notifyFocus(); return; }
+    if (message.kind === "grant") {
+      if (message.token === null) return;           // a token main would not keep: ignored, nothing fails
+      // Any live helper's token is the newest: the portal spent the previous one to make it. The other
+      // ready helper (a replacement waiting to take over) gets it at once, or it would restore with
+      // the spent one and meet a dialog.
+      grantToken = message.token;
+      for (const other of [current, replacement]) {
+        if (other && other !== helper && other.ready && !other.gone) send(other, {op: "grant", token: message.token});
+      }
+      try { deps.onGrant?.(message.token); } catch { /* an observer must never break the reader */ }
+      return;
+    }
     if (message.kind === "ready") {
       if (helper.ready) return;
       if (message.protocol !== READER_PROTOCOL) {
@@ -228,6 +257,7 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
       }
       helper.ready = true;
       helper.readyAt = deps.now();
+      if (grantToken !== null) send(helper, {op: "grant", token: grantToken});
       if (helper.startTimer) { clearTimeout(helper.startTimer); helper.startTimer = null; }
       helper.healthyTimer = setTimeout(() => { backoff = HELPER_BACKOFF_FIRST_MS; }, HELPER_HEALTHY_AFTER_MS);
       tryPromote();
@@ -335,6 +365,16 @@ export function createReaderClient(deps: {spawn: () => HelperLink; now: Now; onE
   }
 
   return {
+    grant(token: string): void {
+      if (!isPlausibleGrantToken(token)) return;
+      grantToken = token;
+      if (current?.ready) send(current, {op: "grant", token});
+    },
+
+    release(): void {
+      if (current?.ready) send(current, {op: "release"});
+    },
+
     state() {
       if (disposed) return "disposed";
       if (current) return current.ready ? "ready" : "starting";

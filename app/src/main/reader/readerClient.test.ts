@@ -2,7 +2,8 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {createFakeHelpers, type FakeHelpers} from "../testing/fakeReaderHelper";
 import {
   CLIENT_CALL_DEADLINE_MS, CLIENT_DENIED_REFRESH_MS, CLIENT_MAX_READ_BUDGET_MS, CLIENT_READ_GRACE_MS, HELPER_BACKOFF_MAX_MS,
-  HELPER_EXIT_LIMIT, HELPER_PLANNED_RESTART_MS, HELPER_PLANNED_RESTART_READS, HELPER_SHUTDOWN_GRACE_MS, HELPER_START_DEADLINE_MS
+  HELPER_EXIT_LIMIT, HELPER_PLANNED_RESTART_MS, HELPER_PLANNED_RESTART_READS, HELPER_SHUTDOWN_GRACE_MS, HELPER_START_DEADLINE_MS,
+  READER_PROTOCOL
 } from "./constants";
 import type {HelperLink} from "./protocol";
 import {createReaderClient, ReaderDown, type ReaderClient, type ReaderClientEvent} from "./readerClient";
@@ -913,7 +914,7 @@ describe("reader client: a link that delivers lines from inside `onLine`", () =>
   }
 
   it("a good `ready` delivered during registration leaves the client ready", async () => {
-    const client = createReaderClient({spawn: () => reentrant(['{"event":"ready","protocol":2}']), now: () => Date.now()});
+    const client = createReaderClient({spawn: () => reentrant([JSON.stringify({event: "ready", protocol: READER_PROTOCOL})]), now: () => Date.now()});
     void client.permission();
     expect(client.state()).toBe("ready");
     await disposeOf(client);
@@ -926,7 +927,7 @@ describe("reader client: a link that delivers lines from inside `onLine`", () =>
     const client = createReaderClient({
       spawn: () => {
         spawned += 1;
-        if (spawned > 1) return reentrant(['{"event":"ready","protocol":2}']);
+        if (spawned > 1) return reentrant([JSON.stringify({event: "ready", protocol: READER_PROTOCOL})]);
         return {
           send: (line) => { if (line.includes("shutdown")) first.shutdown = true; },
           onLine(cb) { first.say = cb; },
@@ -938,7 +939,7 @@ describe("reader client: a link that delivers lines from inside `onLine`", () =>
       now: () => Date.now(), onEvent: (e) => events.push(e)
     });
     void client.permission();
-    first.say('{"event":"ready","protocol":2}');
+    first.say(JSON.stringify({event: "ready", protocol: READER_PROTOCOL}));
     await vi.advanceTimersByTimeAsync(HELPER_PLANNED_RESTART_MS);
     void client.permission();                                    // plans the replacement, ready on arrival
     expect(spawned).toBe(2);
@@ -946,5 +947,123 @@ describe("reader client: a link that delivers lines from inside `onLine`", () =>
     expect(events).toEqual(["HELPER_REPLACED"]);
     expect(first.shutdown).toBe(true);
     await disposeOf(client);
+  });
+});
+
+const WINDOW_FOR_GRANT = {app: "Code", bundleId: "com.microsoft.VSCode", title: "query.sql"};
+
+describe("reader client: the screen-share grant (protocol 3)", () => {
+  let helpers: FakeHelpers;
+  let grants: string[];
+  let client: ReaderClient;
+  const settle = () => vi.advanceTimersByTimeAsync(0);
+
+  async function ready(): Promise<void> {
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    helpers = createFakeHelpers();
+    grants = [];
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onGrant: (token) => grants.push(token)});
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("hands the grant to a ready helper, and nothing before it is ready", async () => {
+    client.grant("t-1");
+    void client.permission();
+    expect(helpers.latest().received.some((m) => m.op === "grant")).toBe(false);
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.latest().received).toContainEqual({op: "grant", token: "t-1"});
+  });
+
+  it("sends a grant given while the helper is up at once", async () => {
+    await ready();
+    client.grant("t-2");
+    expect(helpers.latest().received).toContainEqual({op: "grant", token: "t-2"});
+  });
+
+  it("passes a helper's new token on, and gives that newest one to a restarted helper", async () => {
+    client.grant("t-old");
+    await ready();
+    helpers.latest().emit({event: "grant", token: "t-new"});
+    await settle();
+    expect(grants).toEqual(["t-new"]);
+    helpers.latest().exit();
+    await vi.advanceTimersByTimeAsync(60_000);
+    void client.permission();
+    helpers.latest().ready();
+    await settle();
+    expect(helpers.all.length).toBeGreaterThan(1);
+    expect(helpers.latest().received).toContainEqual({op: "grant", token: "t-new"});
+    expect(helpers.latest().received).not.toContainEqual({op: "grant", token: "t-old"});
+  });
+
+  it("a grant event fails nothing that was in flight", async () => {
+    await ready();
+    const permission = client.permission();
+    helpers.latest().emit({event: "grant", token: "t-3"});
+    helpers.latest().answerLast({permission: "granted"});
+    await expect(permission).resolves.toBe("granted");
+  });
+
+  it("a grant event with a bad token is ignored, and fails nothing in flight", async () => {
+    client.grant("t-good");
+    await ready();
+    const permission = client.permission();
+    helpers.latest().emit({event: "grant", token: "not a token"});
+    helpers.latest().answerLast({permission: "granted"});
+    await expect(permission).resolves.toBe("granted");
+    expect(grants).toEqual([]);
+  });
+
+  it("a new token reaches the other ready helper at once, so a replacement never holds a spent one", async () => {
+    client.grant("t-1");
+    await ready();
+    const first = helpers.latest();
+    await vi.advanceTimersByTimeAsync(HELPER_PLANNED_RESTART_MS);
+    const held = client.read({budgetMs: 1500, expect: WINDOW_FOR_GRANT});   // keeps the old helper busy, so no swap
+    const replacement = helpers.latest();
+    expect(replacement).not.toBe(first);
+    replacement.ready();
+    await settle();
+    expect(replacement.received).toContainEqual({op: "grant", token: "t-1"});
+    first.emit({event: "grant", token: "t-2"});                               // the old helper opened a session
+    await settle();
+    expect(replacement.received).toContainEqual({op: "grant", token: "t-2"});
+    first.answerLast({ok: false, reason: "failed"});
+    await held;
+  });
+
+  it("an implausible token is not remembered or sent", async () => {
+    await ready();
+    client.grant("a b");
+    expect(helpers.latest().received.some((m) => m.op === "grant")).toBe(false);
+  });
+
+  it("sends release to a ready helper, and never to a helper that is not up", async () => {
+    client.release();
+    expect(helpers.all).toHaveLength(0);
+    void client.permission();                 // a helper starts, and is not ready yet
+    client.release();
+    expect(helpers.latest().received.some((m) => m.op === "release")).toBe(false);
+    helpers.latest().ready();
+    await settle();
+    client.release();
+    expect(helpers.latest().received).toContainEqual({op: "release"});
+  });
+
+  it("an observer that throws does not break the client", async () => {
+    client = createReaderClient({spawn: helpers.spawn, now: () => Date.now(), onGrant: () => { throw new Error("boom"); }});
+    await ready();
+    helpers.latest().emit({event: "grant", token: "t-4"});
+    await settle();
+    const permission = client.permission();
+    helpers.latest().answerLast({permission: "denied"});
+    await expect(permission).resolves.toBe("denied");
   });
 });

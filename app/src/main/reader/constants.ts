@@ -12,7 +12,17 @@
  * this number is the only thing it can refuse on. That this is not theoretical was measured: the
  * development bundle ran for most of a day with a helper older than the app beside it.
  */
-export const READER_PROTOCOL = 2;
+export const READER_PROTOCOL = 3;
+
+/**
+ * 3 added the screen-share grant (the Linux plan, Task 3): main sends `grant` with the token it
+ * keeps and `release` when capture is switched off; the helper sends a `grant` event with the fresh
+ * token each session start returns (the portal's restore tokens are single-use). The number moved
+ * because main treats a line it cannot read as a failure of every call in flight: a helper that sent
+ * `grant` to a main that did not know it would break reads. The other direction is harmless, and the
+ * macOS and Windows helpers speak 3 and never send `grant`.
+ */
+export const GRANT_TOKEN_MAX_CHARS = 128;
 
 /** The client's own deadlines sit inside main's (`READER_CALL_TIMEOUT_MS` 5 s, and 5 s on top of the read budget). */
 export const CLIENT_CALL_DEADLINE_MS = 4_000;
