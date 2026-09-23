@@ -16,7 +16,7 @@
 //              signed on its own and copied to Contents/MacOS by the bundle step.
 import {spawnSync} from "node:child_process";
 import {createHash} from "node:crypto";
-import {cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync} from "node:fs";
+import {cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync} from "node:fs";
 import {homedir} from "node:os";
 import {basename, dirname, join, posix, resolve, sep} from "node:path";
 import {fileURLToPath} from "node:url";
@@ -59,9 +59,39 @@ export const TARGETS = {
       "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/",
       "node_modules/@reflink/reflink-win32-x64-msvc/"
     ],
-    rustTarget: "x86_64-pc-windows-msvc"
+    rustTarget: "x86_64-pc-windows-msvc",
+    // node-llama-cpp's prebuilt Windows binaries link Microsoft's C++ runtime dynamically, and a clean
+    // Windows need not have it. The three DLLs are copied app-locally (owner decision, 2026-09-23)
+    // into each folder that holds a `llama-addon.node`: Node loads an addon with its own folder
+    // searched first, so a copy beside it is found before, or in the absence of, a system one.
+    runtime: {
+      files: ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"],
+      into: ["node_modules/@node-llama-cpp/win-x64/bins/win-x64", "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan"]
+    }
   }
 };
+
+/**
+ * The newest Visual C++ redistributable folder (`...\VC\Redist\MSVC\<version>\x64\Microsoft.VC14x.CRT`)
+ * among candidates, with its version, or `null`. Newest by the numeric version in the path, so
+ * `14.44.35112` beats `14.9.1` and a stray folder without a version is never picked.
+ */
+export function pickRedistDir(candidates) {
+  const versioned = candidates.map((path) => {
+    const parts = path.split("\\").join("/").split("/");
+    const at = parts.findIndex((p) => p.toUpperCase() === "MSVC");
+    const version = at >= 0 ? parts[at + 1] : undefined;
+    return {path, version, numbers: /^[0-9]+(\.[0-9]+)*$/.test(version ?? "") ? version.split(".").map(Number) : null};
+  }).filter((c) => c.numbers !== null && /^Microsoft\.VC14[0-9]\.CRT$/i.test(c.path.split("\\").join("/").split("/").pop() ?? ""));
+  versioned.sort((a, b) => {
+    for (let i = 0; i < Math.max(a.numbers.length, b.numbers.length); i += 1) {
+      const d = (b.numbers[i] ?? 0) - (a.numbers[i] ?? 0);
+      if (d !== 0) return d;
+    }
+    return 0;
+  });
+  return versioned.length > 0 ? {path: versioned[0].path, version: versioned[0].version} : null;
+}
 
 /** The target for a platform, or `null` for one nothing here packages. */
 export function targetFor(platform) {
@@ -297,6 +327,25 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+/**
+ * The Visual C++ redistributable of the Visual Studio installed here: `CLAVE_VCREDIST_DIR` when set
+ * (with the version as its `MSVC\<version>` segment), else every `Microsoft Visual Studio\<year>\
+ * <edition>\VC\Redist\MSVC\<version>\x64\Microsoft.VC14x.CRT` under both Program Files folders.
+ */
+function findRedistDir(env) {
+  if (env.CLAVE_VCREDIST_DIR) return pickRedistDir([env.CLAVE_VCREDIST_DIR]);
+  const dirs = (path) => { try { return readdirSync(path, {withFileTypes: true}).filter((e) => e.isDirectory()).map((e) => join(path, e.name)); } catch { return []; } };
+  const candidates = [];
+  for (const programs of [env["ProgramFiles(x86)"], env.ProgramFiles].filter(Boolean)) {
+    for (const year of dirs(join(programs, "Microsoft Visual Studio"))) {
+      for (const edition of dirs(year)) {
+        for (const version of dirs(join(edition, "VC", "Redist", "MSVC"))) candidates.push(...dirs(join(version, "x64")));
+      }
+    }
+  }
+  return pickRedistDir(candidates);
+}
+
 export function stage({appDir, argv, env, home, log, err, platform = process.platform}) {
   const fail = (code, detail) => { err(`STAGE_FAILED ${code}${detail ? ` ${detail}` : ""}`); return 1; };
   const target = targetFor(platform);
@@ -373,13 +422,26 @@ export function stage({appDir, argv, env, home, log, err, platform = process.pla
     if (pruneDecision(entry.rel, {platform}) === "drop") rmSync(join(modules, entry.rel), {recursive: true, force: true});
   }
 
+  // The system runtime the native binaries need, beside each of them (Windows: see TARGETS.win32.runtime).
+  let systemRuntime = null;
+  if (target.runtime) {
+    const redist = findRedistDir(env);
+    if (redist === null) return fail("RUNTIME_MISSING", "no Visual C++ redistributable found; install the VS Build Tools or set CLAVE_VCREDIST_DIR");
+    for (const file of target.runtime.files) if (!existsSync(join(redist.path, file))) return fail("RUNTIME_MISSING", join(redist.path, file));
+    for (const into of target.runtime.into) {
+      if (!existsSync(join(root, into))) return fail("RUNTIME_HOME_MISSING", into);
+      for (const file of target.runtime.files) cpSync(join(redist.path, file), join(root, into, file));
+    }
+    systemRuntime = {version: redist.version, files: target.runtime.files};
+  }
+
   // The licence file: every component in the pruned closure, the helper's crates, Electron, and the
   // hand-kept entries; a missing or non-permissive licence refuses the whole run. Written into dist/
   // so it ships inside the asar; Electron's own two licence files are copied beside the root for the
   // bundle step to place in Contents/Resources.
   const cargo = env.CLAVE_CARGO ?? tools.cargo;
   if (!existsSync(cargo)) return fail("CARGO_MISSING", cargo);
-  const licences = generateLicences({root, appDir, flavour, cargo, env, rustTarget: target.rustTarget});
+  const licences = generateLicences({root, appDir, flavour, cargo, env, rustTarget: target.rustTarget, runtime: systemRuntime});
   if (licences.error) return fail(licences.error, licences.detail);
   writeFileSync(join(root, "dist", "THIRD-PARTY-LICENSES.txt"), licences.text);
   mkdirSync(join(staging, "electron"), {recursive: true});

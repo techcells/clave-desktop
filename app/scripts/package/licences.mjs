@@ -169,6 +169,18 @@ export function linkedCrates(graph) {
   return [...linked].map((id) => packages.get(id)).map((p) => ({name: p.name, version: p.version, licence: p.license ?? null, source: p.repository ?? undefined}));
 }
 
+/**
+ * The licence file's entry for a system runtime shipped beside the native binaries: the hand-kept
+ * description (`licences.fixed.json` runtimes) with the version and files of the copy that staging
+ * made. A refusal when either half is missing, so a runtime can never ship unlisted.
+ */
+export function runtimeEntry(fixed, runtime) {
+  if (!runtime) return {entry: null};
+  if (!fixed || typeof fixed.name !== "string" || typeof fixed.licence !== "string" || typeof fixed.source !== "string" || typeof fixed.note !== "string") return {error: "RUNTIME_ENTRY_MISSING"};
+  if (typeof runtime.version !== "string" || !Array.isArray(runtime.files) || runtime.files.length === 0) return {error: "RUNTIME_ENTRY_MISSING"};
+  return {entry: {name: fixed.name, version: runtime.version, files: [...runtime.files], licence: fixed.licence, copyright: fixed.copyright ?? "", source: fixed.source, note: fixed.note}};
+}
+
 /** The model's paragraph, or a refusal for a release build whose model licence is not confirmed. */
 export function modelSection(model, flavour) {
   if (!model || typeof model.name !== "string") return {error: "MODEL_ENTRY_MISSING"};
@@ -211,6 +223,14 @@ export function render(sections) {
   block("Runtime framework", [sections.electron]);
   lines.push("Chromium and its third-party components: their licences are in LICENSES.chromium.html beside this file.", "");
   block("Inference engine", sections.components);
+  // A system runtime is not open-source and is not judged by the allow-list: it is named, versioned,
+  // and pointed at the vendor's own redistribution terms (`runtimeEntry`). Windows only.
+  if (Array.isArray(sections.runtimes) && sections.runtimes.length > 0) {
+    lines.push(RULE, "System runtime (redistributable, not open source)", RULE, "");
+    for (const r of sections.runtimes) {
+      lines.push(`${r.name} ${r.version}`, `Files: ${r.files.join(", ")}`, r.source, `Licence: ${r.licence}`, r.copyright, "", r.note, "");
+    }
+  }
   block("Native reader helper: Rust crates (statically linked)", sections.crates);
   block("JavaScript packages", sections.packages);
   lines.push(RULE, "Language model (downloaded at set-up, not bundled)", RULE, "", sections.model, "");
@@ -233,7 +253,7 @@ const FIXED_PATH = join(dirname(fileURLToPath(import.meta.url)), "licences.fixed
  * Reads everything, checks it, renders it. Returns `{text, electronFiles}` or `{error, detail}`.
  * `root` is the staged asar root; `appDir` the checkout's app/; `cargo` the absolute cargo path.
  */
-export function generateLicences({root, appDir, flavour, cargo, env, rustTarget = "aarch64-apple-darwin"}) {
+export function generateLicences({root, appDir, flavour, cargo, env, rustTarget = "aarch64-apple-darwin", runtime = null}) {
   const fixed = JSON.parse(readFileSync(FIXED_PATH, "utf8"));
   const appPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const files = walk(root).filter((e) => e.kind === "file").map((e) => e.rel);
@@ -301,11 +321,13 @@ export function generateLicences({root, appDir, flavour, cargo, env, rustTarget 
   const components = (fixed.components ?? []).map((c) => ({name: c.name, version: c.version, licence: c.licence, copyright: c.copyright, source: c.source}));
   const model = modelSection(fixed.model, flavour);
   if (model.error) return {error: model.error};
+  const system = runtimeEntry(fixed.runtimes?.msvc, runtime);
+  if (system.error) return {error: system.error};
 
   const problems = checkEntries([electron, ...components, ...crates, ...packages]);
   if (problems.length > 0) return {error: problems[0].code, detail: `${problems[0].name}${problems[0].licence ? ` (${problems[0].licence})` : ""}`};
 
-  const rendered = render({app: {name: appPackage.name, version: appPackage.version}, electron, packages, crates, components, model: model.text, texts: fixed.texts ?? {}});
+  const rendered = render({app: {name: appPackage.name, version: appPackage.version}, electron, packages, crates, components, runtimes: system.entry ? [system.entry] : [], model: model.text, texts: fixed.texts ?? {}});
   if (rendered.error) return {error: rendered.error, detail: rendered.detail};
   const clean = cleanText(rendered.text);
   if (clean === null) return {error: "LICENCE_TEXT_UNREADABLE", detail: "rendered"};

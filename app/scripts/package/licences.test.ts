@@ -6,7 +6,8 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as licences from "./licences.mjs";
 
-const {ALLOWED, licenceField, chosenLicence, packageRoots, licenceFilesIn, cleanText, checkEntries, modelSection, render, pickLicenceFile, normaliseSource, linkedCrates} = licences as {
+const {ALLOWED, licenceField, chosenLicence, packageRoots, licenceFilesIn, cleanText, checkEntries, modelSection, render, pickLicenceFile, normaliseSource, linkedCrates, runtimeEntry} = licences as {
+  runtimeEntry: (fixed: unknown, runtime: unknown) => {entry?: Record<string, unknown> | null; error?: string};
   linkedCrates: (graph: unknown) => Array<{name: string; version: string; licence: string | null}>;
   pickLicenceFile: (files: string[], chosen: string | null) => string | null;
   normaliseSource: (raw: unknown) => string | undefined;
@@ -20,6 +21,34 @@ const {ALLOWED, licenceField, chosenLicence, packageRoots, licenceFilesIn, clean
   modelSection: (model: unknown, flavour: string) => {text?: string; error?: string};
   render: (sections: Record<string, unknown>) => {text?: string; error?: string; detail?: string};
 };
+
+describe("runtimeEntry: a system runtime shipped beside the native binaries", () => {
+  const fixed = {name: "Microsoft Visual C++ Runtime", licence: "Microsoft terms", copyright: "Copyright (c) Microsoft Corporation", source: "https://learn.microsoft.com/x", note: "Windows only."};
+  const copied = {version: "14.44.35112", files: ["msvcp140.dll", "vcruntime140.dll"]};
+
+  it("is nothing when no runtime was copied, as on macOS", () => {
+    expect(runtimeEntry(fixed, null)).toEqual({entry: null});
+  });
+
+  it("joins the hand-kept description to the version and files of the copy", () => {
+    expect(runtimeEntry(fixed, copied)).toEqual({entry: {...fixed, ...copied}});
+  });
+
+  it("refuses a runtime that was copied but not described, or described without its terms", () => {
+    expect(runtimeEntry(undefined, copied)).toEqual({error: "RUNTIME_ENTRY_MISSING"});
+    expect(runtimeEntry({...fixed, source: undefined}, copied)).toEqual({error: "RUNTIME_ENTRY_MISSING"});
+    expect(runtimeEntry(fixed, {version: "14.44", files: []})).toEqual({error: "RUNTIME_ENTRY_MISSING"});
+  });
+
+  it("is rendered in its own section, outside the allow-list's appendix", () => {
+    const base = {app: {name: "clave-agent", version: "0.1.1"}, electron: {name: "Electron", version: "44.4.1", licence: "MIT", text: "MIT text"}, packages: [], crates: [], components: [], model: "Qwen", texts: {}};
+    const withRuntime = render({...base, runtimes: [runtimeEntry(fixed, copied).entry]}).text ?? "";
+    expect(withRuntime).toContain("System runtime (redistributable, not open source)\n");
+    expect(withRuntime).toContain("Microsoft Visual C++ Runtime 14.44.35112\nFiles: msvcp140.dll, vcruntime140.dll\nhttps://learn.microsoft.com/x\nLicence: Microsoft terms\n");
+    expect(withRuntime).not.toContain("Appendix");
+    expect(render(base).text).not.toContain("System runtime");
+  });
+});
 
 describe("linkedCrates: the crates inside the helper binary", () => {
   // The shape of `cargo metadata --format-version 1`, cut down to what the walk reads. It mirrors the
@@ -241,6 +270,11 @@ describe("a real staged licence file, when one exists", () => {
     for (const crate of crates) expect(text, crate).toContain(crate);
     // Compile-time-only crates run inside the compiler and are not in the binary (`linkedCrates`).
     if (platform === "win32") for (const macro of ["\nwindows-implement ", "\nsyn ", "\nunicode-ident "]) expect(text, macro).not.toContain(macro);
+    // The Microsoft runtime Windows ships beside the model binaries is named, in its own section.
+    if (platform === "win32") {
+      expect(text).toContain("System runtime (redistributable, not open source)");
+      expect(text).toMatch(/\nMicrosoft Visual C\+\+ Runtime 14\.[0-9.]+\nFiles: msvcp140\.dll, vcruntime140\.dll, vcruntime140_1\.dll\n/);
+    } else expect(text).not.toContain("Microsoft Visual C++ Runtime");
     for (const needle of ["Electron 44.", "node-llama-cpp 3.21.1", "llama.cpp", "Qwen3.5-4B", "LICENSES.chromium.html", "Appendix: standard licence texts",
       "react 19.2.0 (compiled into the application code)", "react-dom 19.2.0 (compiled", "scheduler 0.", "zod 4.6.5 (compiled"]) {
       expect(text, needle).toContain(needle);

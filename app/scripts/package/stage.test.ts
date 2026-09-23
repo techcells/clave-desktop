@@ -7,7 +7,8 @@ import {fileURLToPath} from "node:url";
 import {describe, expect, it} from "vitest";
 import * as stageScript from "./stage.mjs";
 
-const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest, resolveOut, requestedFlavour, installedIds, pnpmInvocation} = stageScript as {
+const {shipList, runtimePackageJson, lockHas, pruneDecision, forbidden, manifest, resolveOut, requestedFlavour, installedIds, pnpmInvocation, pickRedistDir} = stageScript as {
+  pickRedistDir: (candidates: string[]) => {path: string; version: string} | null;
   shipList: (files: string[], flavour: string, platform?: string) => {ship?: string[]; helper?: string; error?: {code: string; path: string}};
   runtimePackageJson: (a: {flavour: string; version: string; nodeLlamaCppVersion: string}) => Record<string, unknown>;
   lockHas: (lock: string, id: string) => boolean;
@@ -196,6 +197,20 @@ describe("Windows: the same rules, for what a win32 staging run ships", () => {
   });
 });
 
+describe("pickRedistDir: which Visual C++ runtime the Windows build copies", () => {
+  const crt = (version: string, name = "Microsoft.VC143.CRT") => `C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Redist/MSVC/${version}/x64/${name}`;
+
+  it("takes the newest version by number, not by text", () => {
+    expect(pickRedistDir([crt("14.9.1"), crt("14.44.35112"), crt("14.38.33130")])).toEqual({path: crt("14.44.35112"), version: "14.44.35112"});
+  });
+
+  it("ignores a folder that is not a CRT folder or has no version, and answers null when nothing is left", () => {
+    expect(pickRedistDir([crt("14.44.35112", "Microsoft.VC143.OpenMP"), crt("onecore"), crt("14.44.35112", "debug_nonredist")])).toBeNull();
+    expect(pickRedistDir([])).toBeNull();
+    expect(pickRedistDir(["C:\\VS\\VC\\Redist\\MSVC\\14.40.33807\\x64\\Microsoft.VC143.CRT"])).toEqual({path: "C:\\VS\\VC\\Redist\\MSVC\\14.40.33807\\x64\\Microsoft.VC143.CRT", version: "14.40.33807"});
+  });
+});
+
 describe("pnpmInvocation: running pnpm without a shell", () => {
   const exists = (paths: string[]) => (p: string) => paths.includes(p);
   const opts = (paths: string[]) => ({nodePath: "NODE", exists: exists(paths), join: (...p: string[]) => p.join("/"), dirname: (p: string) => p.slice(0, p.lastIndexOf("/"))});
@@ -330,6 +345,12 @@ describe("a real staging run, when one exists", () => {
       ? ["node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node", "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/llama-addon.node"]
       : ["node_modules/@node-llama-cpp/mac-arm64-metal/bins/mac-arm64-metal/llama-addon.node"];
     for (const addon of addons) expect(paths).toContain(addon);
+    // Windows: Microsoft's C++ runtime beside each addon, so the model loads on a PC without it installed.
+    if (platform === "win32") {
+      for (const dir of ["node_modules/@node-llama-cpp/win-x64/bins/win-x64", "node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan"]) {
+        for (const dll of ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"]) expect(paths).toContain(`${dir}/${dll}`);
+      }
+    }
     if (m.flavour === "release") expect(paths).not.toContain("dist/standins-taxonomy.json");
   });
   it("records whether a run was checked", () => { expect(manifests.length >= 0).toBe(true); });
