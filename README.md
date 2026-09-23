@@ -27,15 +27,30 @@ The app works with Wi-Fi off; only the statements you approve ever leave.
 ## Requirements
 
 - macOS 14 or later, with Screen Recording permission, asked for on first run
-- Or Windows 10 version 1903 or later (Windows 11 recommended), which needs no permission. Windows
-  runs from a checkout for now; there is no Windows installer yet. Linux is planned.
+- Or Windows 10 version 1903 or later (Windows 11 recommended), 64-bit Intel or AMD, which needs no
+  permission. Linux is planned.
 - About 3 GB of disk for the model, downloaded once during set-up
+- A computer fast enough to run the model. During set-up the app times the model on your machine and
+  allows it up to four times the normal time limits; a slower machine is told so, and reading
+  stays off. A laptop with only integrated graphics may not pass.
 - For development: Node.js, pnpm, and a Rust toolchain for the native reader; on Windows, also the
   Visual Studio Build Tools with the C++ workload and a Windows SDK
 
 The reader uses each system's own parts: ScreenCaptureKit and Vision on macOS, Windows.Graphics.Capture
 and Windows.Media.Ocr on Windows. On Windows the recogniser reads the languages whose Windows language
 pack is installed, English first.
+
+## Installing on Windows
+
+Each release has a Windows installer (`.exe`), a ZIP of the same app, and `SHA256SUMS`. The installer
+is per-user: it needs no administrator rights and installs into
+`%LOCALAPPDATA%\Programs\<app name>`, with a Start-menu shortcut. Uninstall it from Settings → Apps;
+your data in `%APPDATA%\<app name>` is left in place.
+
+The Windows builds are not code-signed yet, so SmartScreen warns before the first run. Choose
+**More info → Run anyway**. On Windows the app reads Microsoft Edge and English-language Google
+Chrome; other browsers are refused rather than read. What is still missing on Windows is tracked in
+[docs/WINDOWS-TODO.md](docs/WINDOWS-TODO.md).
 
 ## Running it
 
@@ -57,6 +72,19 @@ pnpm --dir app test:native       # Rust tests
 pnpm --dir app smoke             # end-to-end smoke run, prints SMOKE OK
 ```
 
+To build an installer, run the packaging stages in order (`--flavour internal` or `release`):
+
+```bash
+pnpm --dir app package:stage -- --flavour internal
+pnpm --dir app package:bundle -- --flavour internal
+pnpm --dir app package:sign -- --flavour internal
+pnpm --dir app package:artefacts -- --flavour internal
+```
+
+On Windows this also needs Inno Setup 6. The VC++ runtime DLLs shipped beside the model's native
+add-on are copied from the Visual Studio installation. Release-flavour Windows artefacts are refused
+until Windows signing is set up.
+
 ## Repository layout
 
 | Path | What it is |
@@ -66,14 +94,14 @@ pnpm --dir app smoke             # end-to-end smoke run, prints SMOKE OK
 | `app/src/shell`, `app/src/renderer` | Electron entry points, preload and the React UI |
 | `app/src/eval`, `app/src/readerEval` | Release gate for the real model and the reader eval harness |
 | `app/native/reader` | Rust helper that captures the focused window and recognises text, talking JSON lines over stdio |
-| `app/scripts` | Build, native build, dev bundle and reader eval scripts |
+| `app/scripts` | Build, native build, dev bundle, packaging and reader eval scripts |
 | `eval/` | Synthetic fixtures for the extraction pipeline; never real screen text |
-| `docs/` | The what-leaves page (plans, specs and review records are kept internally) |
+| `docs/` | The what-leaves page and the Windows to-do list (plans, specs and review records are kept internally) |
 
 ## Status
 
-Early, pre-release. The core pipeline, desktop shell and macOS reader are built and tested; the
-connection to the Clave backend is in progress.
+Early, pre-release. The core pipeline, desktop shell, and the macOS and Windows readers are built and
+tested. Packaged builds sign in to the Clave backend with email or Google.
 
 ## License
 
