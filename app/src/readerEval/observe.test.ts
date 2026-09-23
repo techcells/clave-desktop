@@ -557,8 +557,8 @@ describe("what the gate leaves on disk", () => {
       gate.reveal(rows);
       expect(existsSync(path)).toBe(true);
       expect(readFileSync(path, "utf8")).toContain("SENTINEL-STRIP");
-      // the file the owner alone may read
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+      // the file the owner alone may read (POSIX bits: Windows reports 0o666 for every file)
+      if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
 
       age = REVEAL_HEARTBEAT_MAX_AGE_MS + 1;
       gate.reveal(rows);
@@ -625,7 +625,8 @@ describe("how the reveal file is written", () => {
       const path = join(dir, observeRevealName(NONCE));
       writeRevealFile(path, "SENTINEL-STRIP", realIo);
       expect(REVEAL_FILE_MODE).toBe(0o600);
-      expect(statSync(path).mode & 0o777).toBe(REVEAL_FILE_MODE);
+      // POSIX bits only: Windows reports 0o666 for every file, and keeps it the owner's by the profile's ACL.
+      if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(REVEAL_FILE_MODE);
       expect(readFileSync(path, "utf8")).toBe("SENTINEL-STRIP");
     });
   });

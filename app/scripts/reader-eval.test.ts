@@ -1703,7 +1703,9 @@ describe("the heartbeat", () => {
       writeHeartbeat(path, {writeFile: writeFileSync});
       expect(statSync(path).size).toBe(0);
       expect(readFileSync(path, "utf8")).toBe("");
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+      // Windows has no POSIX permission bits (Node reports 0o666 for every file); there the user
+      // profile's own access rules are what keep the file the owner's.
+      if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
       expect(HEARTBEAT_CONTENTS).toBe("");
     } finally {
       rmSync(dir, {recursive: true, force: true});

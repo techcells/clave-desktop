@@ -28,7 +28,9 @@ const fixtures = "/tmp/checkout/eval/fixtures";
 const mainEntry = "/tmp/checkout/app/dist/main.cjs";
 const evalEntry = "/tmp/checkout/app/dist/reader-eval.cjs";
 
-describe("resolveLaunch", () => {
+// The launcher only ever runs inside the macOS dev bundle (scripts/dev-bundle.mjs), with macOS paths:
+// ~/Library/Application Support is its data folder. On Windows `join` would backslash every one of them.
+describe.skipIf(process.platform === "win32")("resolveLaunch", () => {
   it("bakes in all four defaults and the main entry when nothing else is set", () => {
     const {set, entry} = resolveLaunch({env: {}, lastLaunch: {}, appDir, home});
     expect(set).toEqual({
