@@ -85,7 +85,9 @@ const status = (over: Partial<EngineStatus> = {}): EngineStatus => ({
 });
 
 const settings = (over: Partial<UserSettings> = {}): UserSettings => ({
-  exclusions: ["1Password", "Messages", "Mail", "Calendar"],
+  // Stored rules, as the real defaults are (core/exclusions/defaults.ts): an app rule, a title rule,
+  // both at once, and a plain entry the user typed. Plain names here once hid how rules read.
+  exclusions: ["1Password::", "Messages::", "::online banking", "Slack::general", "Calendar"],
   excludedSites: ["mail.google.com", "web.whatsapp.com", "bank.example"],
   // 7, not 6: onboarding is over once its LAST step has been read, and 6 is that step being on
   // screen. A default of 6 would open every "after onboarding" scenario on the Done step.

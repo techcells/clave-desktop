@@ -1,7 +1,7 @@
 import type {ReactNode} from "react";
 import {useId, useState} from "react";
 import {COPY} from "../copy";
-import {addEntry, removeEntry} from "../model/controls";
+import {addEntry, entryRows} from "../model/controls";
 import {Submit, useAction} from "./Controls";
 
 /**
@@ -14,9 +14,11 @@ import {Submit, useAction} from "./Controls";
  * first threw away what the user wrote whenever the save was refused — leaving a validation message
  * next to an empty box and nothing to correct.
  */
-export function EntryList({label, entries, placeholder, problem, save, children}: {
+export function EntryList({label, entries, show = (entry) => entry, placeholder, problem, save, children}: {
   label: string;
   entries: readonly string[];
+  /** How an entry reads (`ruleLabel` for app rules). Only the display: the list saves and removes the stored entry. */
+  show?: (entry: string) => string;
   placeholder: string;
   problem?: string | null;
   save: (next: string[]) => Promise<boolean>;
@@ -28,7 +30,7 @@ export function EntryList({label, entries, placeholder, problem, save, children}
   const problemId = `${id}-problem`;
 
   const add = async () => {
-    const next = addEntry(entries, draft);
+    const next = addEntry(entries, draft, show);
     if (next === null) return;
     if (await save(next)) setDraft("");
   };
@@ -38,10 +40,10 @@ export function EntryList({label, entries, placeholder, problem, save, children}
       <label className="label" htmlFor={id}>{label}</label>
       {entries.length === 0 ? null : (
         <ul className="entries">
-          {entries.map((entry) => (
-            <li key={entry}>
-              <span className="entry-name">{entry}</span>
-              <button type="button" className="entry-drop" aria-label={COPY.common.remove(entry)} onClick={() => run(() => save(removeEntry(entries, entry)))}>
+          {entryRows(entries, show).map((row) => (
+            <li key={row.key}>
+              <span className="entry-name">{row.text}</span>
+              <button type="button" className="entry-drop" aria-label={row.removeLabel} onClick={() => run(() => save(row.without))}>
                 {"×"}
               </button>
             </li>

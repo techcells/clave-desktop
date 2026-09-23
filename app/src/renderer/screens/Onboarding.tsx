@@ -8,7 +8,7 @@ import {EntryList} from "../components/EntryList";
 import {APP_FILE, BLOCKERS, blockerCopy, CLAIMS, COPY, downloadProblem, knownLimits, LINUX_COPY, PERMISSION_STEPS, privateWindowsLine, SETTINGS_PROBLEMS, signInProblem, WINDOWS_COPY} from "../copy";
 import type {Step} from "../model/views";
 import {STEPS, downloadView, extensionProblem, gigabytes, isTranslocated, stillWaiting} from "../model/views";
-import {fixAction} from "../model/controls";
+import {fixAction, ruleLabel} from "../model/controls";
 import type {Shell} from "../shell";
 
 /**
@@ -440,6 +440,7 @@ function NeverRead({shell}: {shell: Shell}): ReactNode {
       <EntryList
         label={COPY.onboarding.apps}
         entries={settings.exclusions}
+        show={ruleLabel}
         placeholder={COPY.settings.addApp}
         problem={sentence(appsProblem)}
         save={(exclusions) => into(setAppsProblem)({exclusions})}

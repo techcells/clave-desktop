@@ -221,6 +221,15 @@ export const COPY = {
     reviewTimeTitle: "Review time", reviewTimeLabel: "Show me today's evidence at",
     doneTitle: "Ready", finish: "Open the app"
   },
+  // How an excluded-app rule reads in the list. Rules are stored as `app::title words` (see
+  // core/exclusions/rules.ts); an app-only rule reads as the app's name and needs no sentence. A
+  // plain entry (what the user types) also covers window titles, and says so, so it never reads
+  // like the app-only rule with the same name.
+  exclusions: {
+    either: (text: string) => `${text}, and windows with “${text}” in the title`,
+    anyTitle: (words: string) => `Any window with “${words}” in its title`,
+    appWithTitle: (app: string, words: string) => `${app} windows with “${words}” in their title`
+  },
   settings: {addCurrent: (app: string) => `Exclude ${app}`, deleteAll: "Delete all local data", alsoModel: "Also remove the model", signOut: "Sign out",
     title: "Settings", apps: "Excluded apps", sites: "Excluded sites", addApp: "Name of an app", addSite: "A site, like example.com",
     reviewTime: "Review time", account: "Account", localData: "Local data", about: "About",

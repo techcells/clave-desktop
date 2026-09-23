@@ -6,6 +6,7 @@ import {Button, Field, Submit, useAction, useHeading} from "../components/Contro
 import {EntryList} from "../components/EntryList";
 import {FLAVOUR} from "../../shared/flavour";
 import {COPY, LINUX_COPY, privateWindowsLine, SETTINGS_PROBLEMS} from "../copy";
+import {excludesApp, ruleLabel} from "../model/controls";
 import type {Shell} from "../shell";
 
 /**
@@ -49,13 +50,14 @@ export function Settings({shell}: {shell: Shell}): ReactNode {
       <EntryList
         label={COPY.settings.apps}
         entries={settings.exclusions}
+        show={ruleLabel}
         placeholder={COPY.settings.addApp}
         problem={sentence(appsProblem)}
         save={(exclusions) => saveApps({exclusions})}
       >
-        {/* Case-insensitively, the same way `addEntry` refuses a duplicate: offering to exclude
-            "slack" when "Slack" is already in the list would write a second entry for one app. */}
-        {recent === null || settings.exclusions.some((app) => app.toLowerCase() === recent.toLowerCase()) ? null : (
+        {/* Not when the app is already kept out: offering to exclude "slack" when "Slack", or
+            "1Password" when "1Password::", is in the list would write a second entry for one app. */}
+        {recent === null || excludesApp(settings.exclusions, recent) ? null : (
           <p className="actions">
             <Button
               label={COPY.settings.addCurrent(recent)}
