@@ -47,6 +47,19 @@ describe("the real reader as the app builds it", () => {
     await real.reader.dispose();
   });
 
+  it("passes the helper's fresh screen-share grants to onGrant", async () => {
+    const grants: string[] = [];
+    const real = createRealReader({
+      helperPath: "/app/dist/native/clave-reader", exists: () => true, spawnChild: () => asHelper(), now: () => Date.now(),
+      onGrant: (token) => { grants.push(token); }
+    });
+    real.reader.grant("t-1");
+    void real.reader.permission();
+    await until(() => grants.length > 0);
+    expect(grants).toEqual(["t-1-next"]);
+    await real.reader.dispose();
+  });
+
   it("keeps the events that happen before the engine exists and hands them over in order, then passes later ones straight on", async () => {
     const real = createRealReader({
       helperPath: "/nonexistent/clave-reader", exists: () => true,

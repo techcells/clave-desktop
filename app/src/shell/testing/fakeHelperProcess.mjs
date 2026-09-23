@@ -35,6 +35,8 @@ lines.on("line", (line) => {
     else say({id: message.id, ok: true, window: FRONT, text: "line one\nlínea dos ✓", stats: {captureMs: 3, cacheHit: false}});
   }
   else if (message.op === "requestPermission") say({id: message.id});
+  // Protocol 3: a grant answered the way a Linux helper does once a session starts with it.
+  else if (message.op === "grant") say({event: "grant", token: `${message.token}-next`});
 });
 lines.on("close", () => { if (mode !== "stubborn") process.exit(0); });
 if (mode === "stubborn") setInterval(() => undefined, 1000);

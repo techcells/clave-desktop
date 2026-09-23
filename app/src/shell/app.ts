@@ -1,6 +1,7 @@
 import {execFile, spawn} from "node:child_process";
 import {randomBytes, randomUUID} from "node:crypto";
 import {existsSync, readFileSync} from "node:fs";
+import {readdir, readFile} from "node:fs/promises";
 import {dirname, join} from "node:path";
 import {pathToFileURL} from "node:url";
 import {app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, safeStorage, session, shell, Tray, utilityProcess} from "electron";
@@ -15,6 +16,7 @@ import {createNodeDownloadDisk, createNodeHttp} from "../main/model/nodeDownload
 import {parseTaxonomy, type ClaveApi} from "../main/ports/claveApi";
 import {parseFrontWindow, type Reader} from "../main/ports/reader";
 import {systemLocalTime} from "../main/review/scheduler";
+import {createJsonFile} from "../main/storage/jsonFile";
 import {createNodeFs} from "../main/storage/nodeFs";
 import {dataPaths} from "../main/storage/paths";
 import {COPY} from "../renderer/copy";
@@ -26,16 +28,19 @@ import {createSmokeCipher} from "../standins/smokeCipher";
 import {createStubApi} from "../standins/stubApi";
 import {createPowerSource, createSafeStorageCipher, createUtilityHostLink} from "./adapters";
 import {APP_IDS} from "./appId";
-import {watchBattery} from "./batteryLevel";
+import {linuxBatteryOutput, watchBattery} from "./batteryLevel";
 import {devEnv} from "./devEnv";
 import {resolveApiUrl} from "./apiUrl";
 import {launchMode} from "./launchMode";
+import {platformName, readerSpawnEnv} from "./platform";
 import {createLoopbackListener} from "./loopbackListener";
 import {openLicences} from "./licences";
 import {background, startFailureCode} from "./lifecycle";
 import {isTranslocatedPath} from "./translocation";
 import {chooseHelperPath, createRealReader} from "./realReader";
+import {createScreenGrant, parseScreenGrant, type ScreenGrant} from "./screenGrant";
 import {runSmoke} from "./smoke";
+import {TRAY_HOST_QUERY, closeAction, trayHostFrom} from "./trayHost";
 import {trayKey, trayState} from "./trayState";
 import {samePage} from "./trust";
 
@@ -78,6 +83,12 @@ let tray: Tray | null = null;
 let window: BrowserWindow | null = null;
 let engine: Engine | null = null;
 let quitting = false;
+/**
+ * Whether a tray icon can bring a hidden window back. Linux starts from "no" until the session bus
+ * says a tray host is there (plain GNOME has none), so a closed window is minimised rather than
+ * hidden out of reach; macOS and Windows always have one.
+ */
+let hasTray = process.platform !== "linux";
 /**
  * True once `start()` has put the window up. Until then there is no window, no engine and no IPC
  * handler, so a second instance must not be given a page to load: it would come up against nothing
@@ -164,7 +175,10 @@ function showWindow(): void {
     // Hiding instead of closing is only right while there is still a tray and an engine to come back
     // to. Once we are quitting, or once the engine is gone, a close closes: an app that answers
     // every attempt to shut it by hiding a window is an app the user cannot get rid of.
-    if (!quitting && engine !== null) { event.preventDefault(); window?.hide(); }
+    if (!quitting && engine !== null) {
+      event.preventDefault();
+      if (closeAction(hasTray) === "hide") window?.hide(); else window?.minimize();
+    }
   });
   // loadURL, not loadFile, so the URL the frame reports is the exact string we compared against.
   background(window.loadURL(RENDERER_URL));
@@ -226,10 +240,28 @@ async function start(): Promise<void> {
   // Windows gives it a console of its own. On Windows 11 that console was measured to have no window
   // at all (2026-09-23), but Node documents that one may be shown without `windowsHide`, and nothing
   // guarantees the same on Windows 10 or with another default terminal, so it is asked for explicitly.
+  // The screen-share grant (Linux) is kept here, beside the real reader: every fresh token the reader
+  // sends replaces the kept one, and capture starting and stopping becomes `grant` and `release`.
+  let screenGrant: ScreenGrant | null = null;
   const real = REAL_READER
-    ? createRealReader({helperPath: chooseHelperPath([join(dirname(process.execPath), HELPER_NAME), here(`native/${HELPER_NAME}`)], existsSync), exists: existsSync, spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true}), now: () => Date.now()})
+    ? createRealReader({
+      helperPath: chooseHelperPath([join(dirname(process.execPath), HELPER_NAME), here(`native/${HELPER_NAME}`)], existsSync), exists: existsSync,
+      spawnChild: (path) => spawn(path, [], {stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: readerSpawnEnv(process.platform, process.env)}),
+      now: () => Date.now(),
+      onGrant: (token) => { screenGrant?.saveToken(token); }
+    })
     : null;
   const reader: Reader = real ? real.reader : standInReader();
+  const cipher = SMOKE ? createSmokeCipher() : createSafeStorageCipher(safeStorage);
+  if (real) {
+    screenGrant = createScreenGrant({
+      file: createJsonFile({fs: createNodeFs(), path: paths.screenGrant, parse: parseScreenGrant, cipher}),
+      reader: real.reader
+    });
+    // Read before the engine asks its first question, so a kept grant is already with the reader when
+    // it is asked for permission.
+    await screenGrant.load();
+  }
   // Running from macOS's quarantine copy: a grant given here would belong to a path nobody can find
   // again, so the window says "move to Applications" and the permission request is a no-op until
   // the app has been moved and reopened. The engine keeps its reader; only the renderer's ask is cut.
@@ -247,10 +279,14 @@ async function start(): Promise<void> {
 
   // Windows has no pmset; WMI's charge figure is printed as "NN%" so the same parser reads it. A
   // desktop with no battery prints a bare "%", which parses as no battery.
+  // Linux has neither: the kernel's power-supply files are read directly, and printed the same way.
   const batteryCommand: [string, string[]] = process.platform === "win32"
     ? ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[string](Get-CimInstance Win32_Battery | Select-Object -First 1).EstimatedChargeRemaining + [char]37"]]
     : ["/usr/bin/pmset", ["-g", "batt"]];
-  const battery = watchBattery(() => new Promise((resolve, reject) => execFile(batteryCommand[0], batteryCommand[1], {windowsHide: true}, (error, stdout) => (error ? reject(error) : resolve(stdout)))));
+  const POWER_SUPPLY = "/sys/class/power_supply";
+  const battery = watchBattery(() => process.platform === "linux"
+    ? linuxBatteryOutput({list: () => readdir(POWER_SUPPLY), read: (name, file) => readFile(join(POWER_SUPPLY, name, file), "utf8")})
+    : new Promise((resolve, reject) => execFile(batteryCommand[0], batteryCommand[1], {windowsHide: true}, (error, stdout) => (error ? reject(error) : resolve(stdout)))));
   teardown.push(() => battery.stop());
   /**
    * The last app in front that was not this one, for Settings' "Exclude <app>" button — the user
@@ -268,7 +304,7 @@ async function start(): Promise<void> {
   teardown.push(unwatchFocus);
 
   engine = await createEngine({
-    reader, api, model, downloader, fs: createNodeFs(), cipher: SMOKE ? createSmokeCipher() : createSafeStorageCipher(safeStorage), dataDir,
+    reader, api, model, downloader, fs: createNodeFs(), cipher, dataDir,
     power: createPowerSource(powerMonitor, battery),
     // An unattended smoke run has nobody at the keyboard; without this the loop would (correctly) treat the user as away and read nothing.
     idleSeconds: () => (SMOKE ? 0 : powerMonitor.getSystemIdleTime()),
@@ -283,10 +319,15 @@ async function start(): Promise<void> {
   });
   const current = engine;
   real?.attach(current);
+  if (screenGrant) {
+    const grant = screenGrant;
+    teardown.push(current.onStatus((status) => grant.capture(status.capture === "on")));
+    grant.capture(current.status().capture === "on");
+  }
 
   const router = createIpcRouter({
     engine: current, downloader, reader: translocated ? {requestPermission: async () => undefined} : reader, recentApp: () => recentApp,
-    appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS, translocated, googleSignIn: MODE.realApi, platform: process.platform === "win32" ? "windows" : "mac"},
+    appInfo: {version: app.getVersion(), modelSha256: PINNED_MODEL.sha256, modelSizeBytes: PINNED_MODEL.sizeBytes, standIns: STANDINS, translocated, googleSignIn: MODE.realApi, platform: platformName(process.platform)},
     openWhatLeaves: async () => { await shell.openPath(here("WHAT-LEAVES.md")); },
     openLicences: () => openLicences({path: here("THIRD-PARTY-LICENSES.txt"), exists: existsSync, open: async (path) => { await shell.openPath(path); }}),
     restartApp: () => { app.relaunch(); app.quit(); }
@@ -309,6 +350,9 @@ async function start(): Promise<void> {
   tray.setToolTip(APP_NAME);
   // A Windows tray icon is clicked, not opened like a menu-bar item: a left click brings the window up.
   if (process.platform !== "darwin") tray.on("click", showWindow);
+  if (process.platform === "linux") {
+    execFile(TRAY_HOST_QUERY[0], TRAY_HOST_QUERY[1], (error, stdout) => { hasTray = !error && trayHostFrom(stdout); });
+  }
   current.onStatus(refreshTray);
   refreshTray(current.status());
   showWindow();

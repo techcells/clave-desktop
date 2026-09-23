@@ -31,6 +31,8 @@ export function createRealReader(deps: {
   exists: (path: string) => boolean;
   spawnChild: (path: string) => ChildProcessWithoutNullStreams;
   now: () => number;
+  /** Protocol 3: a fresh screen-share grant from the helper, to be kept in place of the spent one. */
+  onGrant?: (token: string) => void;
 }): RealReader {
   if (!deps.exists(deps.helperPath)) throw new Error("READER_HELPER_MISSING");
   let sink: {noteReaderEvent(event: ReaderClientEvent): void} | null = null;
@@ -38,6 +40,7 @@ export function createRealReader(deps: {
   const reader = createReaderClient({
     spawn: () => createChildHelperLink(() => deps.spawnChild(deps.helperPath)),
     now: deps.now,
+    ...(deps.onGrant ? {onGrant: deps.onGrant} : {}),
     onEvent: (event) => {
       if (sink) sink.noteReaderEvent(event);
       else if (early.length < EARLY_EVENTS_MAX) early.push(event);
