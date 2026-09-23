@@ -1,7 +1,6 @@
 //! The Linux half of the helper, for GNOME 45 and later on Wayland or Xorg: the Clave focus
 //! extension for which window is focused and where, GNOME's screen shield for the lock, the
-//! ScreenCast portal and PipeWire for pixels, and (from Task 4 of the Linux plan) Tesseract for
-//! text.
+//! ScreenCast portal and PipeWire for pixels, and Tesseract for text.
 //!
 //! Everything Linux-specific lives under this module, as `macos` and `win` hold theirs, so the rest
 //! of the crate compiles and tests the same way on every machine.
@@ -13,7 +12,10 @@ pub mod extension;
 pub mod focus;
 pub mod ids;
 pub mod portal;
+pub mod prepare;
+pub mod recognise;
 pub mod session;
+pub mod tesseract;
 
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
@@ -62,11 +64,37 @@ fn note(window: &ExtensionWindow) -> Instant {
     current.since
 }
 
-/// Nothing to prepare: the bus connection opens on first use.
-pub fn prologue() {}
+/// Make sure Tesseract runs on one thread. OpenMP reads `OMP_THREAD_LIMIT` when the library is
+/// loaded, which is before `main`, so setting it now would be too late for this process: when it is
+/// not `1`, the helper starts itself again with it set, keeping its arguments and its stdio. The new
+/// process finds it set and carries on. If the restart fails the helper leaves with `E_ENV` rather
+/// than recognise with every thread (one read under load took 15 s that way, 2026-09-23).
+pub fn prologue() {
+    if thread_limit_is_one(std::env::var("OMP_THREAD_LIMIT").ok().as_deref()) {
+        return;
+    }
+    use std::os::unix::process::CommandExt;
+    let mut arguments = std::env::args_os();
+    let name = arguments.next();
+    let mut again = std::process::Command::new("/proc/self/exe");
+    again.args(arguments).env("OMP_THREAD_LIMIT", "1");
+    if let Some(name) = name {
+        again.arg0(name);
+    }
+    // `exec` only returns on failure.
+    let _ = again.exec();
+    crate::runtime::die("E_ENV", crate::runtime::EXIT_ENV);
+}
 
-/// Nothing to warm yet; recognition arrives with Task 4 of the Linux plan.
-pub fn warm_up() {}
+/// Whether the variable already says one thread.
+pub fn thread_limit_is_one(value: Option<&str>) -> bool {
+    value.map(str::trim) == Some("1")
+}
+
+/// Load the models and run one recognition on a made-up image, before the app asks for a read.
+pub fn warm_up() {
+    recognise::warm_up();
+}
 
 /// Nothing to seed: the extension may be asked from any thread.
 pub fn seed_front_application() {}
@@ -166,8 +194,8 @@ impl Platform for LinuxPlatform {
         Ok(Captured { frame, scale: window.scale, image: () })
     }
 
-    fn recognise(&self, _captured: &Captured<Self::Image>) -> Result<Vec<Line>, ()> {
-        Err(())
+    fn recognise(&self, captured: &Captured<Self::Image>) -> Result<Vec<Line>, ()> {
+        recognise::lines(&captured.frame, captured.scale)
     }
 }
 
@@ -192,6 +220,15 @@ mod tests {
         assert!(!info.band_withheld);
         assert_eq!(ids.mutter_id(info.window_id), Some(3_566_480_909));
         assert_eq!(window_info(&window, &mut ids).window_id, 1, "the same window, the same handle");
+    }
+
+    #[test]
+    fn only_a_limit_of_exactly_one_thread_needs_no_restart() {
+        assert!(thread_limit_is_one(Some("1")));
+        assert!(thread_limit_is_one(Some(" 1 ")));
+        for other in [None, Some(""), Some("0"), Some("2"), Some("4"), Some("one")] {
+            assert!(!thread_limit_is_one(other), "{other:?}");
+        }
     }
 
     #[test]
